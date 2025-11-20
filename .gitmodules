@@ -1,0 +1,7 @@
+[submodule "thirdparty/Megatron-LM"]
+	path = thirdparty/Megatron-LM
+	url = https://github.com/NVIDIA/Megatron-LM.git
+	branch = core_r0.14.0
+[submodule "thirdparty/Pai-Megatron-Patch"]
+	path = thirdparty/Pai-Megatron-Patch
+	url = https://github.com/alibaba/Pai-Megatron-Patch.git

@@ -1,0 +1,13 @@
+source /private/mirror/.venv/bin/activate
+echo $MASTER_ADDR
+echo $MASTER_PORT
+echo $NODE_RANK
+echo $NODE_NUM
+echo $HOST_GPU_NUM
+LOGS_FILE=log_$(date +%Y-%m%d-%H%M-%S)_${NODE_RANK}_${HOST_NUM}.log
+echo $LOGS_FILE
+gpt3/train_gpt3_with_qwen3_tokenizer_multinode.sh \
+    /private/experiments/gpt-tp8-dp2/ckpt \
+    /private/experiments/gpt-tp8-dp2/logs \
+    /private/converted_dataset/shareAI/ShareGPT-Chinese-English-90k/sharegpt_jsonl/processed_data_text_document \
+    &> $LOGS_FILE
