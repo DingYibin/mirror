@@ -21,6 +21,7 @@ import inspect
 
 from functools import partial
 from typing import List, Optional, Tuple, Union
+import patch_mtp
 from megatron.core import parallel_state
 from megatron.training import get_args
 from megatron.training import inprocess_restart
@@ -43,7 +44,7 @@ from qwen3.gpt_layer_specs import (
 from megatron.core.rerun_state_machine import get_rerun_state_machine
 from megatron.core.transformer.spec_utils import import_module
 from megatron.core.utils import StragglerDetector
-from megatron.training import get_args, get_timers, get_tokenizer, pretrain, print_rank_0
+from megatron.training import get_args, get_timers, get_tokenizer, print_rank_0
 from megatron.training.arguments import core_transformer_config_from_args
 from megatron.training.utils import (
     get_batch_on_this_cp_rank,
@@ -68,6 +69,7 @@ except ImportError:
 
 stimer = StragglerDetector()
 
+from training import pretrain
 
 def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
     """Builds the model.
@@ -164,6 +166,8 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
             rope_scaling=args.use_rope_scaling,
             mtp_block_spec=mtp_block_spec,
         )
+    # print(model)
+    # exit()
     return model
 
 
@@ -355,6 +359,19 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
     return train_ds, valid_ds, test_ds
 
 
+def add_extra_args(parser):
+    group = parser.add_argument_group(title="private-args")
+    group.add_argument(
+        '--train-mtp-only',
+        action="store_true",
+        help='Whether or not to thrain mtp layers only.',
+    )
+
+    if has_nvidia_modelopt:
+        parser = add_modelopt_args(parser)
+
+    return parser
+
 if __name__ == "__main__":
 
     # Temporary for transition to core datasets
@@ -369,6 +386,6 @@ if __name__ == "__main__":
         ModelType.encoder_or_decoder,
         forward_step,
         args_defaults={'tokenizer_type': 'GPT2BPETokenizer'},
-        extra_args_provider=add_modelopt_args if has_nvidia_modelopt else None,
+        extra_args_provider=add_extra_args,
         store=store,
     )

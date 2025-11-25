@@ -16,11 +16,13 @@ CHECKPOINT_PATH=$1/$NODE_RANK #<Specify path>
 TENSORBOARD_LOGS_PATH=$2/$NODE_RANK #<Specify path>
 DATA_PATH=$3 #<Specify path and file prefix>_text_document
 MODEL_SIZE=$4
+TRAIN_MTP_ONLY=$5
 DISTRIBUTED_ARGS=(
     --nproc_per_node $GPUS_PER_NODE 
     --nnodes $NUM_NODES 
     --master_addr $MASTER_ADDR 
     --master_port $MASTER_PORT
+    --node_rank $NODE_RANK
 )
 EXTRA_ARGS=" "
 if [ $MODEL_SIZE = 0.6B ]; then
@@ -34,6 +36,8 @@ if [ $MODEL_SIZE = 0.6B ]; then
     ROPE_THETA=1000000
     RMS_NORM_EPS=1e-6
     TP=1
+    TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Instruct-2507
+    EXTRA_ARGS="--qk-layernorm"
 elif [ $MODEL_SIZE = 1.7B ]; then
     NUM_LAYERS=28
     HIDDEN_SIZE=2048
@@ -45,6 +49,8 @@ elif [ $MODEL_SIZE = 1.7B ]; then
     ROPE_THETA=1000000
     RMS_NORM_EPS=1e-6
     TP=1
+    TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Instruct-2507
+    EXTRA_ARGS="--qk-layernorm"
 elif [ $MODEL_SIZE = 8B ]; then
     NUM_LAYERS=36
     HIDDEN_SIZE=4096
@@ -56,7 +62,28 @@ elif [ $MODEL_SIZE = 8B ]; then
     ROPE_THETA=1000000
     RMS_NORM_EPS=1e-6
     TP=2
-    EXTRA_ARGS=" --untie-embeddings-and-output-weights "
+    TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Instruct-2507
+    EXTRA_ARGS=" --untie-embeddings-and-output-weights --qk-layernorm"
+elif [ $MODEL_SIZE = QWQ32B ]; then
+    NUM_LAYERS=64
+    HIDDEN_SIZE=5120
+    NUM_ATTENTION_HEADS=40
+    INTERMEDIATE_SIZE=27648
+    NUM_KEY_VALUE_HEADS=8
+    MAX_POSITION_EMBEDDINGS=131072
+    EXTRA_VOCAB_SIZE=421
+    VOCAB_SIZE=151936
+    ROPE_THETA=1000000
+    RMS_NORM_EPS=1e-5
+    TP=8
+    TOEKENIZER_MODEL="/public/llm_models/Qwen/QwQ-32B"
+    EXTRA_ARGS=" \
+        --untie-embeddings-and-output-weights \
+        --add-qkv-bias \
+        --rotary-seq-len-interpolation-factor 1 \
+        --mtp-num-layers 7 \
+    "
+    
 else
     echo "MODEL_SIZE=${MODEL_SIZE} is not supported, will be set as 0.6B"
     NUM_LAYERS=28
@@ -69,6 +96,12 @@ else
     ROPE_THETA=1000000
     RMS_NORM_EPS=1e-6
     TP=1
+    TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Instruct-2507
+    EXTRA_ARGS="--qk-layernorm"
+fi
+
+if [ $TRAIN_MTP_ONLY = 1 ]; then
+    EXTRA_ARGS=${EXTRA_ARGS}" --train-mtp-only "
 fi
 
 GPT_MODEL_ARGS=(
@@ -86,8 +119,8 @@ GPT_MODEL_ARGS=(
     --group-query-attention
     --num-query-groups $NUM_KEY_VALUE_HEADS
     --kv-channels 128
-    --qk-layernorm
     --max-position-embeddings $MAX_POSITION_EMBEDDINGS
+    --use-rotary-position-embeddings
     --rotary-percent 1.0
     --rotary-base $ROPE_THETA
     --norm-epsilon ${RMS_NORM_EPS}
@@ -97,15 +130,15 @@ GPT_MODEL_ARGS=(
 )
 
 TRAINING_ARGS=(
-    --micro-batch-size 4 
-    --global-batch-size 256 
+    --micro-batch-size 2 
+    --global-batch-size 32 
     # --rampup-batch-size 16 16 5859375 
     # --train-samples 262144
     --train-iters 5000
     --weight-decay 0.1 
     --adam-beta1 0.9 
     --adam-beta2 0.95 
-    --init-method-std 0.006 
+    --init-method-std 0.008 
     --clip-grad 1.0 
     --fp16
     --lr 6.0e-5 
@@ -126,14 +159,14 @@ DATA_ARGS=(
     --data-path $DATA_PATH 
     --tokenizer-type HuggingFaceTokenizer \
     --make-vocab-size-divisible-by 1024 \
-    --tokenizer-model /public/llm_models/Qwen/Qwen3-30B-A3B-Instruct-2507 \
+    --tokenizer-model $TOEKENIZER_MODEL \
     --split 949,50,1
 )
 
 EVAL_AND_LOGGING_ARGS=(
-    --log-interval 10
-    --save-interval 1000 
-    --eval-interval 1000 
+    --log-interval 1
+    --save-interval 100 
+    --eval-interval 10000 
     --save $CHECKPOINT_PATH 
     --load $CHECKPOINT_PATH 
     --eval-iters 10

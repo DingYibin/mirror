@@ -11,4 +11,4 @@ export MASTER_PORT=6000
 export HOST_NUM=1
 export NODE_RANK=0
 
-gpt3/train_gpt3_with_qwen3_tokenizer_multinode.sh $1 $2 $3 $4
+gpt3/train_gpt3_with_qwen3_tokenizer_multinode.sh $1 $2 $3 $4 $5
