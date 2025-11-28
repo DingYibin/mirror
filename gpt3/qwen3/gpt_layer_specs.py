@@ -162,7 +162,6 @@ def get_gpt_layer_with_transformer_engine_spec(
         return ModuleSpec(
             module=TransformerLayer,
             submodules=TransformerLayerSubmodules(
-                input_layernorm=backend.layer_norm(),
                 self_attention=ModuleSpec(
                     module=SelfAttention,
                     params={"attn_mask_type": AttnMaskType.causal},
