@@ -4,6 +4,11 @@
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
+# MEGATRON_PATH=/private/mirror/thirdparty/Megatron-LM
+# MEGATRON_PATCH_PATH=/private/mirror/thirdparty/Pai-Megatron-Patch
+BASIC_PATH=/private/mirror
+export PYTHONPATH=$PYTHONPATH:${BASIC_PATH}
+
 GPUS_PER_NODE=$HOST_GPU_NUM
 # Change for multinode config
 # MASTER_ADDR=localhost
@@ -82,6 +87,7 @@ elif [ $MODEL_SIZE = QWQ32B ]; then
         --add-qkv-bias \
         --rotary-seq-len-interpolation-factor 1 \
         --mtp-num-layers 7 \
+        --main-model-checkpoint /private/qwen-ckpts/QwQ-32B-hf-to-mcore-te-tp8-pp1/release \
     "
     
 else
@@ -157,9 +163,9 @@ MODEL_PARALLEL_ARGS=(
 
 DATA_ARGS=(
     --data-path $DATA_PATH 
-    --tokenizer-type HuggingFaceTokenizer \
-    --make-vocab-size-divisible-by 1024 \
-    --tokenizer-model $TOEKENIZER_MODEL \
+    --tokenizer-type HuggingFaceTokenizer
+    --make-vocab-size-divisible-by 1188
+    --tokenizer-model $TOEKENIZER_MODEL
     --split 949,50,1
 )
 

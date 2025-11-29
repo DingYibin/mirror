@@ -21,7 +21,7 @@ import inspect
 
 from functools import partial
 from typing import List, Optional, Tuple, Union
-import patch_mtp
+import gpt3.patch_mtp
 from megatron.core import parallel_state
 from megatron.training import get_args
 from megatron.training import inprocess_restart
@@ -34,7 +34,7 @@ from megatron.core.datasets.blended_megatron_dataset_builder import BlendedMegat
 from megatron.core.datasets.gpt_dataset import GPTDataset, GPTDatasetConfig, MockGPTDataset
 from megatron.core.enums import ModelType
 from megatron.core.models.gpt import GPTModel
-from qwen3.gpt_layer_specs import (
+from gpt3.qwen3.gpt_layer_specs import (
     get_gpt_decoder_block_spec,
     get_gpt_layer_local_spec,
     get_gpt_layer_with_transformer_engine_spec,
@@ -69,7 +69,7 @@ except ImportError:
 
 stimer = StragglerDetector()
 
-from training import pretrain
+from gpt3.training import pretrain
 
 def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
     """Builds the model.
@@ -148,7 +148,8 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
                 build_model_context_args["preserve_high_precision_init_val"] = True
         except:
             raise RuntimeError("--fp8-param-gather requires `fp8_model_init` from TransformerEngine, but not found.")
-
+    # print(f"{args.padded_vocab_size=}")
+    # print(f"{args.extra_vocab_size=}")
     with build_model_context(**build_model_context_args):
         model = GPTModel(
             config=config,
@@ -166,8 +167,19 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
             rope_scaling=args.use_rope_scaling,
             mtp_block_spec=mtp_block_spec,
         )
-    # print(model)
-    # exit()
+    if getattr(args, 'train_mtp_only', False) and args.main_model_checkpoint != "":
+        tp_rank = mpu.get_tensor_model_parallel_rank()
+        ckpt_path = os.path.join(
+            args.main_model_checkpoint,
+            f"mp_rank_{tp_rank:02d}",
+            "model_optim_rng.pt",
+        )
+        state_dict = torch.load(ckpt_path, weights_only=False)
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict['model'], strict=False)
+        print(f"{missing_keys = }\n{unexpected_keys = }\n", end="")
+        
+
+    print(f"{model=}\n", end="")
     return model
 
 
@@ -365,6 +377,13 @@ def add_extra_args(parser):
         '--train-mtp-only',
         action="store_true",
         help='Whether or not to thrain mtp layers only.',
+    )
+
+    group.add_argument(
+        '--main-model-checkpoint',
+        type=str,
+        default="",
+        help='',
     )
 
     if has_nvidia_modelopt:
