@@ -37,6 +37,77 @@ from megatron.core.utils import WrappedTensor, deprecate_inference_params
     
 from megatron.core.models.gpt import GPTModel
 
+from megatron.core.parallel_state import (
+    get_tensor_model_parallel_group,
+    get_tensor_model_parallel_rank,
+    get_tensor_model_parallel_world_size,
+)
+
+class _ParallelCrossEntropy(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, mtp_logits, target_prob):
+        """Vocab parallel cross entropy forward function."""
+
+
+        mtp_logits = mtp_logits.float()
+        logits_max = torch.max(mtp_logits, dim=-1)[0]
+
+        torch.distributed.all_reduce(
+            logits_max, op=torch.distributed.ReduceOp.MAX, group=get_tensor_model_parallel_group()
+        )
+
+
+        mtp_logits -= logits_max.unsqueeze(dim=-1)
+
+        sum_exp_logits = torch.exp(mtp_logits).sum(dim=-1)
+
+        torch.distributed.all_reduce(
+            sum_exp_logits,
+            op=torch.distributed.ReduceOp.SUM,
+            group=get_tensor_model_parallel_group(),
+        )
+
+        mtp_logits -= torch.log(sum_exp_logits.unsqueeze(dim=-1))
+
+        loss = torch.sum(-target_prob * mtp_logits, 2)
+
+        torch.distributed.all_reduce(
+            loss,
+            op=torch.distributed.ReduceOp.SUM,
+            group=get_tensor_model_parallel_group(),
+        )
+        # Store softmax, target-mask and masked-target for backward pass.
+        ctx.save_for_backward(mtp_logits, target_prob)
+
+        return loss
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        """Vocab parallel cross entropy backward function."""
+
+        # Retreive tensors from the forward path.
+        mtp_logits, target_prob = ctx.saved_tensors
+        grad_input = torch.exp(mtp_logits) - target_prob
+        grad_input.mul_(grad_output.unsqueeze(dim=-1))
+
+        return grad_input, None
+
+
+def parallel_cross_entropy(mtp_logits, target_prob):
+    """
+    Performs cross entropy loss when logits are split across tensor parallel ranks
+
+    Args:
+        mtp_logits: logits split across tensor parallel ranks
+            dimension is [sequence_length, batch_size, vocab_size/num_parallel_ranks]
+
+        target_prob: correct vocab ids of dimseion [sequence_length, batch_size, vocab_size/num_parallel_ranks]
+
+    """
+    return _ParallelCrossEntropy.apply(mtp_logits, target_prob)
+
+
+
 class OnlyMTPGPTModel(GPTModel):
 
 
@@ -98,43 +169,7 @@ class OnlyMTPGPTModel(GPTModel):
             mtp_labels = labels.clone()
             hidden_states_list = torch.chunk(hidden_states, 1 + self.config.mtp_num_layers, dim=0)
             hidden_states = hidden_states_list[0]
-            if loss_mask is None:
-                # if loss_mask is not provided, use all ones as loss_mask
-                loss_mask = torch.ones_like(mtp_labels)
-            for mtp_layer_number in range(self.config.mtp_num_layers):
-                # output
-                mtp_logits, _ = self.output_layer(
-                    hidden_states_list[mtp_layer_number + 1],
-                    weight=output_weight,
-                    runtime_gather_output=runtime_gather_output,
-                )
-                # Calc loss for the current Multi-Token Prediction (MTP) layers.
-                mtp_labels, _ = roll_tensor(mtp_labels, shifts=-1, dims=-1, cp_group=self.cp_group)
-                loss_mask, num_tokens = roll_tensor(
-                    loss_mask, shifts=-1, dims=-1, cp_group=self.cp_group
-                )
-                mtp_loss = self.compute_language_model_loss(mtp_labels, mtp_logits)
-                mtp_loss = loss_mask * mtp_loss
-                if self.training:
-                    # TODO(shifangx): remove the use of parallel_state here
-                    # after moving loss logging to loss_func in pretrain_gpt.py
-                    MTPLossLoggingHelper.save_loss_to_tracker(
-                        torch.sum(mtp_loss) / num_tokens,
-                        mtp_layer_number,
-                        self.config.mtp_num_layers,
-                        avg_group=parallel_state.get_data_parallel_group(
-                            with_context_parallel=True
-                        ),
-                    )
-                mtp_loss_scale = self.config.mtp_loss_scaling_factor / self.config.mtp_num_layers
-                if self.config.calculate_per_token_loss:
-                    hidden_states = MTPLossAutoScaler.apply(
-                        hidden_states, mtp_loss_scale * mtp_loss
-                    )
-                else:
-                    hidden_states = MTPLossAutoScaler.apply(
-                        hidden_states, mtp_loss_scale * mtp_loss / num_tokens
-                    )
+
         sequence_parallel_override = False
         if in_inference_mode and inference_context.materialize_only_last_token_logits:
             if inference_context.is_static_batching():
@@ -162,6 +197,65 @@ class OnlyMTPGPTModel(GPTModel):
         logits, _ = self.output_layer(
             hidden_states, weight=output_weight, runtime_gather_output=runtime_gather_output
         )
+        
+        if self.mtp_process:
+            target_logits = logits.float().detach()
+            target_logits_max = torch.max(target_logits, dim=-1)[0]
+
+            torch.distributed.all_reduce(
+                target_logits_max, op=torch.distributed.ReduceOp.MAX, group=get_tensor_model_parallel_group()
+            )
+            target_logits -= target_logits_max.unsqueeze(dim=-1)
+            target_prob = target_logits
+            torch.exp(target_logits, out=target_prob)
+            sum_target_prob = target_prob.sum(dim=-1)
+            torch.distributed.all_reduce(
+                sum_target_prob,
+                op=torch.distributed.ReduceOp.SUM,
+                group=get_tensor_model_parallel_group(),
+            )
+            target_prob.div_(sum_target_prob.unsqueeze(dim=-1))
+            target_prob = target_prob.detach()
+
+            if loss_mask is None:
+                # if loss_mask is not provided, use all ones as loss_mask
+                loss_mask = torch.ones_like(mtp_labels)
+            # loss_mask[:, :loss_mask.shape[1] // 2].fill_(0)
+            for mtp_layer_number in range(self.config.mtp_num_layers):
+                # output
+                mtp_logits, _ = self.output_layer(
+                    hidden_states_list[mtp_layer_number + 1],
+                    weight=output_weight,
+                    runtime_gather_output=runtime_gather_output,
+                )
+                # Calc loss for the current Multi-Token Prediction (MTP) layers.
+                target_prob, _ = roll_tensor(target_prob, shifts=-1, dims=0, cp_group=self.cp_group)
+                loss_mask, num_tokens = roll_tensor(
+                    loss_mask, shifts=-1, dims=-1, cp_group=self.cp_group
+                )
+
+
+                mtp_loss = parallel_cross_entropy(mtp_logits, target_prob)
+                if self.training:
+                    # TODO(shifangx): remove the use of parallel_state here
+                    # after moving loss logging to loss_func in pretrain_gpt.py
+                    MTPLossLoggingHelper.save_loss_to_tracker(
+                        torch.sum(mtp_loss) / num_tokens,
+                        mtp_layer_number,
+                        self.config.mtp_num_layers,
+                        avg_group=parallel_state.get_data_parallel_group(
+                            with_context_parallel=True
+                        ),
+                    )
+                mtp_loss_scale = self.config.mtp_loss_scaling_factor / self.config.mtp_num_layers
+                if self.config.calculate_per_token_loss:
+                    logits = MTPLossAutoScaler.apply(
+                        logits, mtp_loss_scale * mtp_loss
+                    )
+                else:
+                    logits = MTPLossAutoScaler.apply(
+                        logits, mtp_loss_scale * mtp_loss / num_tokens
+                    )
 
         # Restore sequence parallel execution to the output layer if necessary.
         if sequence_parallel_override:

@@ -21,7 +21,10 @@ import inspect
 
 from functools import partial
 from typing import List, Optional, Tuple, Union
-import gpt3.patch_mtp
+
+if os.environ.get("MTP_MOVE_EH_PROJ", "0") == "1":
+    import gpt3.patch_mtp
+
 from megatron.core import parallel_state
 from megatron.training import get_args
 from megatron.training import inprocess_restart
@@ -70,6 +73,7 @@ except ImportError:
 stimer = StragglerDetector()
 
 from gpt3.training import pretrain
+from gpt3.patch_gpt import OnlyMTPGPTModel
 
 def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
     """Builds the model.
@@ -150,8 +154,9 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
             raise RuntimeError("--fp8-param-gather requires `fp8_model_init` from TransformerEngine, but not found.")
     # print(f"{args.padded_vocab_size=}")
     # print(f"{args.extra_vocab_size=}")
+    model_cls = OnlyMTPGPTModel if getattr(args, 'train_mtp_only', False) else GPTModel
     with build_model_context(**build_model_context_args):
-        model = GPTModel(
+        model = model_cls(
             config=config,
             transformer_layer_spec=transformer_layer_spec,
             vocab_size=args.padded_vocab_size,
@@ -176,10 +181,13 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
         )
         state_dict = torch.load(ckpt_path, weights_only=False)
         missing_keys, unexpected_keys = model.load_state_dict(state_dict['model'], strict=False)
-        print(f"{missing_keys = }\n{unexpected_keys = }\n", end="")
+        mtp_missing_keys = [item for item in missing_keys if item.startswith('mtp')]
+        missing_keys = [item for item in missing_keys if not item.startswith('mtp')]
+        print(f"{mtp_missing_keys = }\n{missing_keys = }\n{unexpected_keys = }\n", end="")
         
 
     print(f"{model=}\n", end="")
+    # exit()
     return model
 
 

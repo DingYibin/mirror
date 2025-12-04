@@ -22,6 +22,7 @@ TENSORBOARD_LOGS_PATH=$2/$NODE_RANK #<Specify path>
 DATA_PATH=$3 #<Specify path and file prefix>_text_document
 MODEL_SIZE=$4
 TRAIN_MTP_ONLY=$5
+export MTP_MOVE_EH_PROJ=$6
 DISTRIBUTED_ARGS=(
     --nproc_per_node $GPUS_PER_NODE 
     --nnodes $NUM_NODES 
@@ -88,6 +89,7 @@ elif [ $MODEL_SIZE = QWQ32B ]; then
         --rotary-seq-len-interpolation-factor 1 \
         --mtp-num-layers 7 \
         --main-model-checkpoint /private/qwen-ckpts/QwQ-32B-hf-to-mcore-te-tp8-pp1/release \
+        --mtp-loss-scaling-factor 1.0 \
     "
     
 else
@@ -106,8 +108,55 @@ else
     EXTRA_ARGS="--qk-layernorm"
 fi
 
+
+NUM_TRAIN_ITERATIONS=32768
+if [ $NUM_NODES = 1 ]; then
+    NUM_TRAIN_ITERATIONS=4096
+fi
+
+TRAINING_ARGS=(
+    --micro-batch-size 2 
+    --global-batch-size 32 
+    # --rampup-batch-size 16 16 5859375 
+    # --train-samples 262144
+    --train-iters $NUM_TRAIN_ITERATIONS
+    --weight-decay 0.1 
+    --adam-beta1 0.9 
+    --adam-beta2 0.95 
+    --init-method-std 0.008 
+    --clip-grad 1.0 
+    --bf16
+    --lr 1.0e-4 
+    --lr-decay-style cosine 
+    --min-lr 1.0e-5
+    --lr-warmup-fraction .001 
+    --lr-decay-iters 3000 
+    --no-gradient-accumulation-fusion
+    --seq-length 4096
+)
+
 if [ $TRAIN_MTP_ONLY = 1 ]; then
     EXTRA_ARGS=${EXTRA_ARGS}" --train-mtp-only "
+    TRAINING_ARGS=(
+        --micro-batch-size 2 
+        --global-batch-size 32 
+        # --rampup-batch-size 16 16 5859375 
+        # --train-samples 262144
+        --train-iters $NUM_TRAIN_ITERATIONS
+        --weight-decay 0.1 
+        --adam-beta1 0.9 
+        --adam-beta2 0.95 
+        --init-method-std 0.008 
+        --clip-grad 1.0 
+        --bf16
+        --lr 1.0e-4 
+        --lr-decay-style constant 
+        --min-lr 1.0e-5
+        --lr-warmup-iters 500
+        # --lr-decay-iters 3000 
+        --no-gradient-accumulation-fusion
+        --seq-length 4096
+    )
 fi
 
 GPT_MODEL_ARGS=(
@@ -135,26 +184,7 @@ GPT_MODEL_ARGS=(
     --hidden-dropout 0.0
 )
 
-TRAINING_ARGS=(
-    --micro-batch-size 2 
-    --global-batch-size 32 
-    # --rampup-batch-size 16 16 5859375 
-    # --train-samples 262144
-    --train-iters 5000
-    --weight-decay 0.1 
-    --adam-beta1 0.9 
-    --adam-beta2 0.95 
-    --init-method-std 0.008 
-    --clip-grad 1.0 
-    --fp16
-    --lr 6.0e-5 
-    --lr-decay-style cosine 
-    --min-lr 6.0e-6
-    --lr-warmup-fraction .001 
-    --lr-decay-iters 500 
-    --no-gradient-accumulation-fusion
-    --seq-length 4096
-)
+
 
 MODEL_PARALLEL_ARGS=(
 	--tensor-model-parallel-size $TP 
@@ -171,7 +201,7 @@ DATA_ARGS=(
 
 EVAL_AND_LOGGING_ARGS=(
     --log-interval 1
-    --save-interval 100 
+    --save-interval 1000
     --eval-interval 10000 
     --save $CHECKPOINT_PATH 
     --load $CHECKPOINT_PATH 
