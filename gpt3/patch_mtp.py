@@ -3,7 +3,7 @@
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Union
-
+import os
 import torch
 from torch import Tensor
 
@@ -89,37 +89,49 @@ def MultiTokenPredictionLayer__init__(
         + f"The supported attention mask types are {SUPPORTED_ATTN_MASK}."
     )
 
-    self.enorm = build_module(
-        self.submodules.enorm,
-        config=self.config,
-        hidden_size=self.config.hidden_size,
-        eps=self.config.layernorm_epsilon,
-    )
+    # 0: original
+    # 1: move eh_proj to last
+    # 2: move_eh_proj to last and add to embeddings
+    # 3: move_eh_proj to last and add to hidden states
+    # 4: remove eh_proj
+    self.eh_proj_mode = int(os.environ.get("MTP_EH_PROJ_MODE", "1"))
+    if self.eh_proj_mode < 1 or self.eh_proj_mode > 4:
+        self.eh_proj_mode = 1
+    print(f"EH_PROJ_RESNET_MODE = {self.eh_proj_mode}\n", end="")
 
-    self.hnorm = build_module(
-        self.submodules.hnorm,
-        config=self.config,
-        hidden_size=self.config.hidden_size,
-        eps=self.config.layernorm_epsilon,
-    )
+    if self.eh_proj_mode != 4:
 
-    # For the linear projection at the (k - 1)-th MTP layer, the input is the concatenation
-    # of the i-th tocken's hidden states and the (i + K)-th tocken's decoder input,
-    # so the input's shape is [s, b, 2*h].
-    # The output will be send to the following transformer layer,
-    # so the output's shape should be [s, b, h].
-    self.eh_proj = build_module(
-        self.submodules.eh_proj,
-        self.config.hidden_size * 2,
-        self.config.hidden_size * 2,
-        config=self.config,
-        init_method=self.config.init_method,
-        gather_output=False,
-        bias=False,
-        skip_bias_add=False,
-        is_expert=False,
-    )
-    self.activation_func = swiglu
+        self.enorm = build_module(
+            self.submodules.enorm,
+            config=self.config,
+            hidden_size=self.config.hidden_size,
+            eps=self.config.layernorm_epsilon,
+        )
+
+        self.hnorm = build_module(
+            self.submodules.hnorm,
+            config=self.config,
+            hidden_size=self.config.hidden_size,
+            eps=self.config.layernorm_epsilon,
+        )
+
+        # For the linear projection at the (k - 1)-th MTP layer, the input is the concatenation
+        # of the i-th tocken's hidden states and the (i + K)-th tocken's decoder input,
+        # so the input's shape is [s, b, 2*h].
+        # The output will be send to the following transformer layer,
+        # so the output's shape should be [s, b, h].
+        self.eh_proj = build_module(
+            self.submodules.eh_proj,
+            self.config.hidden_size * 2,
+            self.config.hidden_size * 2,
+            config=self.config,
+            init_method=self.config.init_method,
+            gather_output=False,
+            bias=False,
+            skip_bias_add=False,
+            is_expert=False,
+        )
+        self.activation_func = swiglu
     self.transformer_layer = build_module(
         self.submodules.transformer_layer, config=self.config, vp_stage=vp_stage
     )
@@ -136,13 +148,16 @@ def MultiTokenPredictionLayer_concat_embeddings(self, hidden_states: torch.Tenso
     """
     Concatenate the tokens before sending to transformer layer.
     """
-    decoder_input = self.enorm(decoder_input)
-    decoder_input = make_viewless_tensor(inp=decoder_input, requires_grad=True, keep_graph=True)
+    if self.eh_proj_mode == 4:
+        return hidden_states
+    hidden_states_input = hidden_states
+    embeddings = self.enorm(decoder_input)
+    embeddings = make_viewless_tensor(inp=embeddings, requires_grad=True, keep_graph=True)
     
     hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
     # At the (k - 1)-th MTP module, concatenates the i-th tocken's hidden_states
     # and the (i + K)-th tocken's embedding, and combine them with linear projection.
-    hidden_states = torch.cat((decoder_input, hidden_states), -1)
+    hidden_states = torch.cat((embeddings, hidden_states), -1)
     hidden_states, _ = self.eh_proj(hidden_states)
     # For tensor parallel we need to gather the tensor across the model-parallel
     # ranks after the linear projection. This used to call
@@ -151,7 +166,13 @@ def MultiTokenPredictionLayer_concat_embeddings(self, hidden_states: torch.Tenso
     # It has been replaced with the correct `gather_from_tensor_model_parallel_region`.
     hidden_states = gather_from_tensor_model_parallel_region(hidden_states)
     hidden_states = self.activation_func(hidden_states)
-    hidden_states = self.hnorm(hidden_states)
+    if self.eh_proj_mode == 1:
+        hidden_states = self.hnorm(hidden_states)
+    elif self.eh_proj_mode == 2:
+        hidden_states = self.hnorm(hidden_states + decoder_input)
+    elif self.eh_proj_mode == 3:
+        hidden_states = self.hnorm(hidden_states + hidden_states_input)
+        
     # For sequence parallel, scatter after linear_fc and before transformer layer.
     if self.sequence_parallel:
         hidden_states = scatter_to_sequence_parallel_region(hidden_states)

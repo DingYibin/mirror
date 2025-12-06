@@ -21,3 +21,4 @@ gpt3/train_gpt3_with_qwen3_tokenizer.sh \
 - 标准7层MTP，训练日志：log_2025-1203-1843-44_1_2.log
 - 移动 eh_proj 的MTP训练日志 log_2025-1204-1541-09_1_2.log
 - log_2025-1205-2306-59_1_2 ： 移动 eh_proj，修改了学习率的schedule
+- 倾向任认为改学习率无效，修改eh_proj后加到embeddings上后再进行norm计算,

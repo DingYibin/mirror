@@ -22,7 +22,7 @@ TENSORBOARD_LOGS_PATH=$2 #<Specify path>
 DATA_PATH=$3 #<Specify path and file prefix>_text_document
 MODEL_SIZE=$4
 TRAIN_MTP_ONLY=$5
-export MTP_MOVE_EH_PROJ=$6
+export MTP_EH_PROJ_MODE=$6
 DISTRIBUTED_ARGS=(
     --nproc_per_node $GPUS_PER_NODE 
     --nnodes $NUM_NODES 
@@ -110,8 +110,10 @@ fi
 
 
 NUM_TRAIN_ITERATIONS=32768
+SAVE_INTERVAL=8192
 if [ $NUM_NODES = 1 ]; then
     NUM_TRAIN_ITERATIONS=4096
+    SAVE_INTERVAL=1024
 fi
 
 TRAINING_ARGS=(
@@ -137,11 +139,11 @@ TRAINING_ARGS=(
 
 if [ $TRAIN_MTP_ONLY = 1 ]; then
     EXTRA_ARGS=${EXTRA_ARGS}" --train-mtp-only --convert-checkpoint"
-    if [ $MTP_MOVE_EH_PROJ = 1 ]; then
+    if [ $MTP_EH_PROJ_MODE = 0 ]; then
+        EXTRA_ARGS=${EXTRA_ARGS}" --lr-decay-style constant"
+    else
         NUM_DECAY_ITERATIONS=$((NUM_TRAIN_ITERATIONS/2))
         EXTRA_ARGS=${EXTRA_ARGS}" --lr-decay-style cosine  --lr-decay-iters "${NUM_DECAY_ITERATIONS}
-    else
-        EXTRA_ARGS=${EXTRA_ARGS}" --lr-decay-style constant"
     fi
     TRAINING_ARGS=(
         --micro-batch-size 2 
@@ -205,7 +207,7 @@ DATA_ARGS=(
 
 EVAL_AND_LOGGING_ARGS=(
     --log-interval 1
-    --save-interval 2048
+    --save-interval $SAVE_INTERVAL
     --eval-interval 16384 
     --save $CHECKPOINT_PATH 
     --load $CHECKPOINT_PATH 

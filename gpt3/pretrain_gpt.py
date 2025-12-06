@@ -21,8 +21,8 @@ import inspect
 
 from functools import partial
 from typing import List, Optional, Tuple, Union
-
-if os.environ.get("MTP_MOVE_EH_PROJ", "0") == "1":
+print(f"MTP_EH_PROJ_MODE = {os.environ.get("MTP_EH_PROJ_MODE", "0")}\n", end="")
+if os.environ.get("MTP_EH_PROJ_MODE", "0") != "0":
     import gpt3.patch_mtp
 
 from megatron.core import parallel_state

@@ -697,7 +697,7 @@ def pretrain(
 
     one_logger = get_one_logger()
     one_logger and one_logger.log_metrics(app_metrics)
-    args.just_convert_checkpoint = True
+    # args.just_convert_checkpoint = True
     if args.just_convert_checkpoint:
         args.skip_train = True
         args.do_valid = False
