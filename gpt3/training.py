@@ -51,6 +51,7 @@ from megatron.core.fp8_utils import correct_amax_history_if_needed
 from megatron.training.checkpointing import load_checkpoint
 from megatron.training.checkpointing import save_checkpoint
 from megatron.training.checkpointing import checkpoint_exists
+
 from megatron.core.full_cuda_graph import FullCudaGraphWrapper
 from megatron.core.transformer.cuda_graphs import TECudaGraphHelper
 from megatron.core.transformer.module import Float16Module
@@ -696,6 +697,13 @@ def pretrain(
 
     one_logger = get_one_logger()
     one_logger and one_logger.log_metrics(app_metrics)
+    args.just_convert_checkpoint = True
+    if args.just_convert_checkpoint:
+        args.skip_train = True
+        args.do_valid = False
+        args.do_test = False
+        args.convert_checkpoint = True
+
 
     if not args.skip_train:
         print_rank_0('training ...')
@@ -772,6 +780,20 @@ def pretrain(
             write_to_tensorboard=not args.skip_train,
             non_loss_data_func=non_loss_data_func,
         )
+
+    if args.convert_checkpoint:
+        dp_rank = mpu.get_data_parallel_rank()
+        if args.convert_checkpoint_save == "":
+            args.convert_checkpoint_save = os.path.join(args.save, f"converted-{dp_rank}")
+        os.makedirs(args.convert_checkpoint_save, exist_ok=True)
+        # if mpu.get_data_parallel_rank() == 0:
+        tp_rank = mpu.get_tensor_model_parallel_rank()
+        tp_size = mpu.get_tensor_model_parallel_world_size()
+        pp_rank = mpu.get_pipeline_model_parallel_rank()
+        pp_size = mpu.get_pipeline_model_parallel_world_size()
+        file_path = os.path.join(args.convert_checkpoint_save, f"tp-{tp_size}-{tp_rank}-pp-{pp_size}-{pp_rank}.pt")
+        torch.save(model[0].state_dict_for_save_checkpoint(), file_path)
+        torch.distributed.barrier()
 
     wandb_writer = get_wandb_writer()
     if wandb_writer:

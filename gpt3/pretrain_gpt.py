@@ -384,7 +384,7 @@ def add_extra_args(parser):
     group.add_argument(
         '--train-mtp-only',
         action="store_true",
-        help='Whether or not to thrain mtp layers only.',
+        help='Whether or not to train mtp layers only.',
     )
 
     group.add_argument(
@@ -392,6 +392,24 @@ def add_extra_args(parser):
         type=str,
         default="",
         help='',
+    )
+
+    group.add_argument(
+        "--just-convert-checkpoint",
+        action="store_true",
+        help='Whether or not to convert checkpoint, which will skip train.',
+    )
+    
+    group.add_argument(
+        "--convert-checkpoint",
+        action="store_true",
+        help='Whether or not to convert checkpoint, which will skip train.',
+    )
+    group.add_argument(
+        "--convert-checkpoint-save",
+        type=str,
+        default="",
+        help='Dir to save converted checkpoint. If not set, checkpoint will be saved into args.save/converted',
     )
 
     if has_nvidia_modelopt:

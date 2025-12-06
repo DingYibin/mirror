@@ -17,8 +17,8 @@ NUM_NODES=$HOST_NUM
 # NODE_RANK=0
 WORLD_SIZE=$(($GPUS_PER_NODE*$NUM_NODES))
 
-CHECKPOINT_PATH=$1/$NODE_RANK #<Specify path>
-TENSORBOARD_LOGS_PATH=$2/$NODE_RANK #<Specify path>
+CHECKPOINT_PATH=$1 #<Specify path>
+TENSORBOARD_LOGS_PATH=$2 #<Specify path>
 DATA_PATH=$3 #<Specify path and file prefix>_text_document
 MODEL_SIZE=$4
 TRAIN_MTP_ONLY=$5
@@ -136,7 +136,13 @@ TRAINING_ARGS=(
 )
 
 if [ $TRAIN_MTP_ONLY = 1 ]; then
-    EXTRA_ARGS=${EXTRA_ARGS}" --train-mtp-only "
+    EXTRA_ARGS=${EXTRA_ARGS}" --train-mtp-only --convert-checkpoint"
+    if [ $MTP_MOVE_EH_PROJ = 1 ]; then
+        NUM_DECAY_ITERATIONS=$((NUM_TRAIN_ITERATIONS/2))
+        EXTRA_ARGS=${EXTRA_ARGS}" --lr-decay-style cosine  --lr-decay-iters "${NUM_DECAY_ITERATIONS}
+    else
+        EXTRA_ARGS=${EXTRA_ARGS}" --lr-decay-style constant"
+    fi
     TRAINING_ARGS=(
         --micro-batch-size 2 
         --global-batch-size 32 
@@ -150,10 +156,8 @@ if [ $TRAIN_MTP_ONLY = 1 ]; then
         --clip-grad 1.0 
         --bf16
         --lr 1.0e-4 
-        --lr-decay-style constant 
         --min-lr 1.0e-5
-        --lr-warmup-iters 500
-        # --lr-decay-iters 3000 
+        --lr-warmup-iters 1024
         --no-gradient-accumulation-fusion
         --seq-length 4096
     )
@@ -201,8 +205,8 @@ DATA_ARGS=(
 
 EVAL_AND_LOGGING_ARGS=(
     --log-interval 1
-    --save-interval 1000
-    --eval-interval 10000 
+    --save-interval 2048
+    --eval-interval 16384 
     --save $CHECKPOINT_PATH 
     --load $CHECKPOINT_PATH 
     --eval-iters 10

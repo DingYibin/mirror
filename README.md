@@ -16,3 +16,8 @@ gpt3/train_gpt3_with_qwen3_tokenizer.sh \
 - 上一设定看起来依旧太小，是lr的问题还是mtp层太多的问题？尝试改7层MTP为2层，重启实验
 - 7改2无用，注意到有一个参数--mtp-loss-scaling-factor控制了loss的大小，也会影响grad，默认值为0.1，修改为1.0
 - 
+
+###
+- 标准7层MTP，训练日志：log_2025-1203-1843-44_1_2.log
+- 移动 eh_proj 的MTP训练日志 log_2025-1204-1541-09_1_2.log
+- log_2025-1205-2306-59_1_2 ： 移动 eh_proj，修改了学习率的schedule
