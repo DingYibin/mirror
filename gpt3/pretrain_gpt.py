@@ -118,12 +118,12 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
     if args.spec is not None:
         transformer_layer_spec = import_module(args.spec)
     else:
-        print_rank_0(f"this way, sir{args.num_experts}")
+        print_rank_0(f"this way, sir {args.num_experts=}")
         if args.num_experts:
             # Define the decoder block spec
             transformer_layer_spec = get_gpt_decoder_block_spec(config, use_transformer_engine=use_te, normalization=args.normalization)
         else:
-            print_rank_0(f"this way, sir{use_te}")
+            print_rank_0(f"this way, sir {use_te=}")
             # Define the decoder layer spec
             if use_te:                
                 transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec(

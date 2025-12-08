@@ -90,12 +90,13 @@ def MultiTokenPredictionLayer__init__(
     )
 
     # 0: original
-    # 1: move eh_proj to last
-    # 2: move_eh_proj to last and add to embeddings
-    # 3: move_eh_proj to last and add to hidden states
+    # 1: move eh_proj to last, add swiglu
+    # 2: move_eh_proj to last and add to embeddings, add swiglu
+    # 3: move_eh_proj to last and add to hidden states, add swiglu
     # 4: remove eh_proj
+    # 5: move eh_proj to last
     self.eh_proj_mode = int(os.environ.get("MTP_EH_PROJ_MODE", "1"))
-    if self.eh_proj_mode < 1 or self.eh_proj_mode > 4:
+    if self.eh_proj_mode < 1 or self.eh_proj_mode > 5:
         self.eh_proj_mode = 1
     print(f"EH_PROJ_RESNET_MODE = {self.eh_proj_mode}\n", end="")
 
@@ -120,10 +121,15 @@ def MultiTokenPredictionLayer__init__(
         # so the input's shape is [s, b, 2*h].
         # The output will be send to the following transformer layer,
         # so the output's shape should be [s, b, h].
+        if self.eh_proj_mode in [1, 2, 3]:
+            eh_proj_output_hidden_size = self.config.hidden_size * 2
+        elif self.eh_proj_mode in [5]:
+            eh_proj_output_hidden_size = self.config.hidden_size
+
         self.eh_proj = build_module(
             self.submodules.eh_proj,
             self.config.hidden_size * 2,
-            self.config.hidden_size * 2,
+            eh_proj_output_hidden_size,
             config=self.config,
             init_method=self.config.init_method,
             gather_output=False,
@@ -131,7 +137,10 @@ def MultiTokenPredictionLayer__init__(
             skip_bias_add=False,
             is_expert=False,
         )
-        self.activation_func = swiglu
+        if self.eh_proj_mode in [1, 2, 3]:
+            self.activation_func = swiglu
+        elif self.eh_proj_mode in [5]:
+            self.activation_func = torch.nn.Identity()
     self.transformer_layer = build_module(
         self.submodules.transformer_layer, config=self.config, vp_stage=vp_stage
     )

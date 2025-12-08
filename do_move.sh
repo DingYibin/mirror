@@ -13,10 +13,10 @@ echo $LOGS_FILE
 #     &> $LOGS_FILE
 
 gpt3/train_gpt3_with_qwen3_tokenizer_multinode.sh \
-    /private/experiments/qwq-tp8-dp2-move-resnet/ckpt \
-    /private/experiments/qwq-tp8-dp2-move-resnet/log \
+    /private/experiments/ckpt/qwq-tp8-dp2-mtp-mode-3 \
+    /private/experiments/log/qwq-tp8-dp2-mtp-mode-3 \
     /private/converted_dataset/a-m-team/merged-r1-dataset \
     QWQ32B \
     1 \
-    2 \
+    3 \
     &> $LOGS_FILE & tail -f $LOGS_FILE
