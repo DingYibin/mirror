@@ -1,17 +1,27 @@
 # Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+import os
+"""
+0: original
+1: move eh_proj to last, add swiglu
+2: move_eh_proj to last and add to embeddings, add swiglu
+3: move_eh_proj to last and add to hidden states, add swiglu
+4: remove eh_proj
+5: just move eh_proj to last
+6: remove embed input, keep eh_proj
+"""
+MTP_EH_PROJ_MODE = int(os.environ.get("MTP_EH_PROJ_MODE", "0"))
+assert MTP_EH_PROJ_MODE >= 0 and MTP_EH_PROJ_MODE <= 6, f"MTP_EH_PROJ_MODE = {MTP_EH_PROJ_MODE}, which should be an integer in [0, 6].\n"
+
 
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Union
-import os
+
 import torch
 from torch import Tensor
 
 from megatron.core import InferenceParams, mpu, parallel_state, tensor_parallel
-from megatron.core.dist_checkpointing.mapping import ShardedStateDict
-from megatron.core.dist_checkpointing.utils import replace_prefix_for_sharding
 from megatron.core.fp8_utils import get_fp8_context
-from megatron.core.models.backends import BackendSpecProvider, LocalSpecProvider
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.process_groups_config import ModelCommProcessGroups
 from megatron.core.tensor_parallel import (
@@ -20,12 +30,10 @@ from megatron.core.tensor_parallel import (
 )
 from megatron.core.transformer.enums import AttnMaskType
 from megatron.core.transformer.module import MegatronModule
-from megatron.core.transformer.spec_utils import ModuleSpec, build_module
-from megatron.core.transformer.transformer_block import TransformerBlockSubmodules
+from megatron.core.transformer.spec_utils import build_module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.utils import (
     is_torch_min_version,
-    make_tp_sharded_tensor_for_checkpoint,
     make_viewless_tensor,
 )
 
@@ -41,15 +49,6 @@ SUPPORTED_ATTN_MASK = [
     AttnMaskType.padding_causal,
 ]
 
-try:
-    import transformer_engine as te  # pylint: disable=unused-import
-
-    from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
-
-    HAVE_TE = True
-except ImportError:
-    HAVE_TE = False
-
 
 from megatron.core.transformer.multi_token_prediction import (
     MultiTokenPredictionLayer,
@@ -60,11 +59,10 @@ from megatron.core.transformer.multi_token_prediction import (
     SUPPORTED_ATTN_MASK,
     MegatronModule,
 )
+
 def swiglu(x):
     x = torch.chunk(x, 2, dim=-1)
     return torch.nn.functional.silu(x[0]) * x[1]
-            
-# class AdjustedMultiTokenPredictionLayer(MultiTokenPredictionLayer):
 
 def MultiTokenPredictionLayer__init__(
     self,
@@ -89,16 +87,7 @@ def MultiTokenPredictionLayer__init__(
         + f"The supported attention mask types are {SUPPORTED_ATTN_MASK}."
     )
 
-    # 0: original
-    # 1: move eh_proj to last, add swiglu
-    # 2: move_eh_proj to last and add to embeddings, add swiglu
-    # 3: move_eh_proj to last and add to hidden states, add swiglu
-    # 4: remove eh_proj
-    # 5: move eh_proj to last
-    self.eh_proj_mode = int(os.environ.get("MTP_EH_PROJ_MODE", "1"))
-    if self.eh_proj_mode < 1 or self.eh_proj_mode > 5:
-        self.eh_proj_mode = 1
-    print(f"EH_PROJ_RESNET_MODE = {self.eh_proj_mode}\n", end="")
+    self.eh_proj_mode = MTP_EH_PROJ_MODE
 
     if self.eh_proj_mode != 4:
 
@@ -121,14 +110,19 @@ def MultiTokenPredictionLayer__init__(
         # so the input's shape is [s, b, 2*h].
         # The output will be send to the following transformer layer,
         # so the output's shape should be [s, b, h].
+        if self.eh_proj_mode in [1, 2, 3, 5]:
+            eh_proj_input_hidden_size = self.config.hidden_size * 2
+        elif self.eh_proj_mode in [6]:
+            eh_proj_input_hidden_size = self.config.hidden_size
+
         if self.eh_proj_mode in [1, 2, 3]:
             eh_proj_output_hidden_size = self.config.hidden_size * 2
-        elif self.eh_proj_mode in [5]:
+        elif self.eh_proj_mode in [5, 6]:
             eh_proj_output_hidden_size = self.config.hidden_size
 
         self.eh_proj = build_module(
             self.submodules.eh_proj,
-            self.config.hidden_size * 2,
+            eh_proj_input_hidden_size,
             eh_proj_output_hidden_size,
             config=self.config,
             init_method=self.config.init_method,
@@ -139,7 +133,7 @@ def MultiTokenPredictionLayer__init__(
         )
         if self.eh_proj_mode in [1, 2, 3]:
             self.activation_func = swiglu
-        elif self.eh_proj_mode in [5]:
+        elif self.eh_proj_mode in [5, 6]:
             self.activation_func = torch.nn.Identity()
     self.transformer_layer = build_module(
         self.submodules.transformer_layer, config=self.config, vp_stage=vp_stage
@@ -157,7 +151,28 @@ def MultiTokenPredictionLayer_concat_embeddings(self, hidden_states: torch.Tenso
     """
     Concatenate the tokens before sending to transformer layer.
     """
+    # just remove eh_proj
     if self.eh_proj_mode == 4:
+        return hidden_states
+    # remove embed
+    if self.eh_proj_mode == 6:
+        # decoder_input = self.enorm(decoder_input)
+        # decoder_input = make_viewless_tensor(inp=decoder_input, requires_grad=True, keep_graph=True)
+        hidden_states = self.hnorm(hidden_states)
+        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
+        # At the (k - 1)-th MTP module, concatenates the i-th tocken's hidden_states
+        # and the (i + K)-th tocken's embedding, and combine them with linear projection.
+        # hidden_states = torch.cat((decoder_input, hidden_states), -1)
+        hidden_states, _ = self.eh_proj(hidden_states)
+        # For tensor parallel we need to gather the tensor across the model-parallel
+        # ranks after the linear projection. This used to call
+        # `all_gather_last_dim_from_tensor_parallel_region`, but that utility reduces
+        # the gradient in backward pass and was therefore incorrect in this context.
+        # It has been replaced with the correct `gather_from_tensor_model_parallel_region`.
+        hidden_states = gather_from_tensor_model_parallel_region(hidden_states)
+        # For sequence parallel, scatter after linear_fc and before transformer layer.
+        if self.sequence_parallel:
+            hidden_states = scatter_to_sequence_parallel_region(hidden_states)
         return hidden_states
     hidden_states_input = hidden_states
     embeddings = self.enorm(decoder_input)
@@ -175,7 +190,7 @@ def MultiTokenPredictionLayer_concat_embeddings(self, hidden_states: torch.Tenso
     # It has been replaced with the correct `gather_from_tensor_model_parallel_region`.
     hidden_states = gather_from_tensor_model_parallel_region(hidden_states)
     hidden_states = self.activation_func(hidden_states)
-    if self.eh_proj_mode == 1:
+    if self.eh_proj_mode in [1, 5]:
         hidden_states = self.hnorm(hidden_states)
     elif self.eh_proj_mode == 2:
         hidden_states = self.hnorm(hidden_states + decoder_input)
@@ -186,6 +201,7 @@ def MultiTokenPredictionLayer_concat_embeddings(self, hidden_states: torch.Tenso
     if self.sequence_parallel:
         hidden_states = scatter_to_sequence_parallel_region(hidden_states)
     return hidden_states
+
 
 def MultiTokenPredictionLayer_proj_and_transformer_layer(
     self,
@@ -246,12 +262,6 @@ def MultiTokenPredictionLayer_proj_and_transformer_layer(
 
     return hidden_states, out_hidden_states
 
-MultiTokenPredictionLayer.__init__ = MultiTokenPredictionLayer__init__
-MultiTokenPredictionLayer._concat_embeddings = MultiTokenPredictionLayer_concat_embeddings
-MultiTokenPredictionLayer._proj_and_transformer_layer = MultiTokenPredictionLayer_proj_and_transformer_layer
-
-
-
 def MultiTokenPredictionBlock_forward(
     self,
     input_ids: Tensor,
@@ -311,6 +321,17 @@ def MultiTokenPredictionBlock_forward(
     hidden_states = torch.cat(hidden_states_list, dim=0)
     return hidden_states
 
-MultiTokenPredictionBlock.forward = MultiTokenPredictionBlock_forward
+
+
+if MTP_EH_PROJ_MODE >=1 and MTP_EH_PROJ_MODE <= 6:
+    MultiTokenPredictionLayer.__init__ = MultiTokenPredictionLayer__init__
+    print("MultiTokenPredictionLayer.__init__ is replaced.\n", end="")
+    MultiTokenPredictionLayer._concat_embeddings = MultiTokenPredictionLayer_concat_embeddings
+    print("MultiTokenPredictionLayer._concat_embeddings is replaced.\n", end="")
+    if MTP_EH_PROJ_MODE != 6:
+        MultiTokenPredictionLayer._proj_and_transformer_layer = MultiTokenPredictionLayer_proj_and_transformer_layer
+        print("MultiTokenPredictionLayer._proj_and_transformer_layer is replaced.\n", end="")
+        MultiTokenPredictionBlock.forward = MultiTokenPredictionBlock_forward
+        print("MultiTokenPredictionBlock.forward is replaced.\n", end="")
 
 print("Patch to move eh_proj has been applied!\n", end="", flush=True)
