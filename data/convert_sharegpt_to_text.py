@@ -8,7 +8,7 @@ tokenizer = AutoTokenizer.from_pretrained("/public/llm_models/Qwen/Qwen3-30B-A3B
 
 original_dataset = "/public/dataset/shareAI/ShareGPT-Chinese-English-90k/sharegpt_jsonl"
 
-target_dataset = "/private/converted_dataset/shareAI/ShareGPT-Chinese-English-90k/sharegpt_jsonl"
+target_dataset = "/workspace-dyb/converted_dataset/shareAI/ShareGPT-Chinese-English-90k/sharegpt_jsonl"
 
 files = [item for item in os.listdir(original_dataset) if item.endswith("jsonl")]
 

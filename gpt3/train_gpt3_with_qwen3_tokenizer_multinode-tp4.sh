@@ -81,14 +81,14 @@ elif [ $MODEL_SIZE = QWQ32B ]; then
     VOCAB_SIZE=151936
     ROPE_THETA=1000000
     RMS_NORM_EPS=1e-5
-    TP=8
+    TP=4
     TOEKENIZER_MODEL="/public/llm_models/Qwen/QwQ-32B"
     EXTRA_ARGS=" \
         --untie-embeddings-and-output-weights \
         --add-qkv-bias \
         --rotary-seq-len-interpolation-factor 1 \
         --mtp-num-layers 7 \
-        --main-model-checkpoint /workspace-dyb/qwen-ckpts/QwQ-32B-hf-to-mcore-te-tp8-pp1/release \
+        --main-model-checkpoint /workspace-dyb/qwen-ckpts/QwQ-32B-hf-to-mcore-te-tp4-pp1/release \
         --mtp-loss-scaling-factor 1.0 \
     "
     
@@ -109,10 +109,10 @@ else
 fi
 
 
-NUM_TRAIN_ITERATIONS=32768
+NUM_TRAIN_ITERATIONS=16384
 SAVE_INTERVAL=8192
 if [ $NUM_NODES = 1 ]; then
-    NUM_TRAIN_ITERATIONS=4096
+    NUM_TRAIN_ITERATIONS=2048
     SAVE_INTERVAL=1024
 fi
 
@@ -146,8 +146,8 @@ if [ $TRAIN_MTP_ONLY = 1 ]; then
         EXTRA_ARGS=${EXTRA_ARGS}" --lr-decay-style cosine  --lr-decay-iters "${NUM_DECAY_ITERATIONS}
     fi
     TRAINING_ARGS=(
-        --micro-batch-size 2 
-        --global-batch-size 32 
+        --micro-batch-size 4 
+        --global-batch-size 64 
         # --rampup-batch-size 16 16 5859375 
         # --train-samples 262144
         --train-iters $NUM_TRAIN_ITERATIONS

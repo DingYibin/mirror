@@ -2,7 +2,7 @@ import os
 
 
 source_dir = "/public/dataset/a-m-team/AM-DeepSeek-Distilled-40M"
-target_dir = "/private/converted_dataset/a-m-team/AM-DeepSeek-Distilled-40M"
+target_dir = "/workspace-dyb/converted_dataset/a-m-team/AM-DeepSeek-Distilled-40M"
 files = [file for file in os.listdir(source_dir) if file.endswith('.jsonl')]
 # print(files)
 
@@ -12,7 +12,7 @@ for file in files:
     model = file.split('_')[1]
     if model == 'r1':
         print(file)
-        cmd = "python /private/mirror/thirdparty/Megatron-LM/tools/preprocess_data_distilled.py"
+        cmd = "python /workspace-dyb/mirror/thirdparty/Megatron-LM/tools/preprocess_data_distilled.py"
         cmd += f" --input {source_file}"
         cmd += f" --output-prefix {target_file[:-len('.jsonl')]}"
         cmd += " --tokenizer-type HuggingFaceTokenizer"

@@ -1,9 +1,9 @@
 
 ```bash
 gpt3/train_gpt3_with_qwen3_tokenizer.sh \
-    /private/experiments/qwq-tp8/ckpt \
-    /private/experiments/qwq-tp8/log \
-    /private/converted_dataset/shareAI/ShareGPT-Chinese-English-90k/sharegpt_jsonl/processed_data_text_document \
+    /workspace-dyb/experiments/qwq-tp8/ckpt \
+    /workspace-dyb/experiments/qwq-tp8/log \
+    /workspace-dyb/converted_dataset/shareAI/ShareGPT-Chinese-English-90k/sharegpt_jsonl/processed_data_text_document \
     QWQ32B \
     1 \
     1 \
@@ -27,3 +27,6 @@ gpt3/train_gpt3_with_qwen3_tokenizer.sh \
 - 怀疑eh_proj不在前面时没啥用，remove eh_proj后尝试 log_2025-1207-1254-42_1_2
     - remove eh proj 未结束，参看log，move还是有用的
 - eh_proj 加到 hiddenstates后再过norm， mode 3，训练， log_2025-1208-1150-13_1_2.log
+- 仅把eh_proj移动到最后，不加激活函数，mode 5，logs/logs-text/log_2025-1209-1745-21_1_2.log
+    - 本次开始修改并行方式为TP4,并调大global batch size 为从32 改为 64，平均每DP 16, 设置micro batch size为8时OOM,为4时使用量约为131G 每卡 ，原始micro batch size设置为2，改小迭代步数（32768->16384），使用的sample量不变，单步迭代时间从3500ms+变为5500ms+-，倾向认为这种方式设置更好，后续可能调整
+    - 本次开始移动文件夹位置，全局修改`/private/mirror`为`/workspace-dyb/mirror`，一般认为不能这样修改，当前看可以正常运行，出错时可以参考此条进行排查

@@ -1,14 +1,14 @@
 import os
 import torch
 
-source_dir = "/private/experiments/qwq-tp8-dp1/ckpt/0/converted"
-target_dir = "/private/experiments/qwq-tp8-dp1/ckpt/0/converted-hf"
+source_dir = "/workspace-dyb/experiments/qwq-tp8-dp1/ckpt/0/converted"
+target_dir = "/workspace-dyb/experiments/qwq-tp8-dp1/ckpt/0/converted-hf"
 
-source_dir = "/private/experiments/qwq-tp8-dp2/ckpt/converted-0"
-target_dir = "/private/experiments/qwq-tp8-dp2/ckpt/converted-0-hf"
+source_dir = "/workspace-dyb/experiments/qwq-tp8-dp2/ckpt/converted-0"
+target_dir = "/workspace-dyb/experiments/qwq-tp8-dp2/ckpt/converted-0-hf"
 
-source_dir = "/private/experiments/qwq-tp8-dp2-move/ckpt/converted-0"
-target_dir = "/private/experiments/qwq-tp8-dp2-move/ckpt/converted-0-hf"
+source_dir = "/workspace-dyb/experiments/qwq-tp8-dp2-move/ckpt/converted-0"
+target_dir = "/workspace-dyb/experiments/qwq-tp8-dp2-move/ckpt/converted-0-hf"
 
 tp_size = 8
 pp_size = 1

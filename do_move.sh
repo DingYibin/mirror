@@ -1,4 +1,4 @@
-source /private/mirror/.venv/bin/activate
+source /workspace-dyb/mirror/.venv/bin/activate
 echo MASTER_ADDR=$MASTER_ADDR
 echo MASTER_PORT=$MASTER_PORT
 echo NODE_RANK=$NODE_RANK
@@ -7,15 +7,15 @@ echo HOST_GPU_NUM=$HOST_GPU_NUM
 LOGS_FILE=log_$(date +%Y-%m%d-%H%M-%S)_${NODE_RANK}_${HOST_NUM}.log
 echo $LOGS_FILE
 # gpt3/train_gpt3_with_qwen3_tokenizer_multinode.sh \
-#     /private/experiments/gpt-tp8-dp2/ckpt \
-#     /private/experiments/gpt-tp8-dp2/logs \
-#     /private/converted_dataset/shareAI/ShareGPT-Chinese-English-90k/sharegpt_jsonl/processed_data_text_document \
+#     /workspace-dyb/experiments/gpt-tp8-dp2/ckpt \
+#     /workspace-dyb/experiments/gpt-tp8-dp2/logs \
+#     /workspace-dyb/converted_dataset/shareAI/ShareGPT-Chinese-English-90k/sharegpt_jsonl/processed_data_text_document \
 #     &> $LOGS_FILE
 
 gpt3/train_gpt3_with_qwen3_tokenizer_multinode.sh \
-    /private/experiments/ckpt/qwq-tp8-dp2-mtp-mode-3 \
-    /private/experiments/log/qwq-tp8-dp2-mtp-mode-3 \
-    /private/converted_dataset/a-m-team/merged-r1-dataset \
+    /workspace-dyb/experiments/ckpt/qwq-tp8-dp2-mtp-mode-3 \
+    /workspace-dyb/experiments/log/qwq-tp8-dp2-mtp-mode-3 \
+    /workspace-dyb/converted_dataset/a-m-team/merged-r1-dataset \
     QWQ32B \
     1 \
     3 \

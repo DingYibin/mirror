@@ -5,7 +5,7 @@ import torch
 model_path = "/public/llm_models/Qwen/QwQ-32B"
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForCausalLM.from_pretrained(model_path).cuda()
-data_path = "/private/converted_dataset/shareAI/ShareGPT-Chinese-English-90k/sharegpt_jsonl/data.jsonl"
+data_path = "/workspace-dyb/converted_dataset/shareAI/ShareGPT-Chinese-English-90k/sharegpt_jsonl/data.jsonl"
 with open(data_path, 'r', encoding='utf-8') as f:
     for item in f.readlines():
         data = json.loads(item)
