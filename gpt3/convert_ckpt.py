@@ -24,12 +24,12 @@ keys = set()
 for i in range(tp_size):
     for j in range(pp_size):
         filepath = os.path.join(source_dir, f"tp-{tp_size}-{i}-pp-{pp_size}-{j}.pt")
-        one_weight = torch.load(filepath)
+        one_weight = torch.load(filepath， map_location=torch.device('cpu'))
         if weights[i] is None:
             weights[i] = {}
         for key, value in one_weight.items():
             if key.startswith('mtp'):
-                weights[i][key] = value.cpu()
+                weights[i][key] = value
                 # print(key, value.shape if hasattr(value, 'shape') else value)
         del one_weight
         # print(weights[i].keys())
