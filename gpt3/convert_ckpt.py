@@ -83,9 +83,10 @@ for key, val in merged_weight.items():
         name[4] = 'down_proj'   
     elif name[3] == 'self_attn' and name[4] == 'linear_proj':
         name[4] = 'o_proj'
+    elif name[3] == 'final_layernorm':
+        name = name[:3] + ['shared_head', 'norm', 'weight']
 
-
-    if name[3] == 'mlp' and name[4] == 'linear_fc2':
+    if name[3] == 'mlp' and name[4] == 'linear_fc1':
         gate_proj, up_proj = torch.chunk(val, 2, 0)
 
         name[4] = 'gate_proj'
