@@ -381,7 +381,7 @@ class MambaLikeMixer(MegatronModule):
     def forward(
         self,
         hidden_states,
-        ssm_state,
+        ssm_state, # (ntokens, batch, ngroups_local_tp, nheads_per_group, headdim, d_state)
         inference_context=None,
         *,
         inference_params: Optional[BaseInferenceContext] = None,
@@ -408,11 +408,10 @@ class MambaLikeMixer(MegatronModule):
             ],
             dim=-1,
         )
-        z = z.reshape(ntokens, batch, self.nheads_local_tp, self.headdim)
 
         dt = F.softplus(dt + self.dt_bias.to(dtype=dt.dtype))  # (ntokens, batch, nheads_local_tp)
 
-        # TODO add conv
+        # TODO conv for auto regression
         # x.shape = (L, B, nheads_local_tp * headdim)
         # B.shape = (L, B, ngroups_local_tp * d_state)
         # C.shape = (L, B, ngroups_local_tp * d_state)
@@ -427,117 +426,27 @@ class MambaLikeMixer(MegatronModule):
         )
         A = -torch.exp(self.A_log.float()) # (nheads_local_tp, )
         dA = torch.exp(dt * A) # (ntokens, batch, nheads_local_tp)
+        dA = dA.reshape(ntokens, batch, self.ngroups_local_tp, -1, 1, 1) #          (ntokens, batch, ngroups_local_tp, nheads_per_group,       1,       1)
+        dt = dt.reshape(ntokens, batch, self.ngroups_local_tp, -1, 1, 1) #          (ntokens, batch, ngroups_local_tp, nheads_per_group,       1,       1)
         
-
-        B = B.reshape(ntokens, batch, self.ngroups_local_tp, 1, self.d_state)
-        C = C.reshape(ntokens, batch, self.ngroups_local_tp, 1, self.d_state)
-
-
-        if self.ngroups_local_tp > 1:
-
-            A = repeat(A, "h -> (h p) n", p=self.headdim, n=self.d_state)
-            D = repeat(self.D, "h -> (h p)", p=self.headdim)
-
-
-            dA = torch.exp(torch.einsum("bd,dn->bdn", dt, A))
-
-            dB_x = torch.einsum("bd,bdn,bd->bdn", dt, B, x)
-            ssm_state.copy_(
-                ssm_state * rearrange(dA, "b (h p) n -> b h p n", p=self.headdim)
-                + rearrange(dB_x, "b (h p) n -> b h p n", p=self.headdim)
-            )
-
-            y = torch.einsum(
-                "bdn,bdn->bd",
-                rearrange(ssm_state.to(dtype), "b h p n -> b (h p) n", p=self.headdim),
-                C,
-            )
-            y = y + D.to(dtype) * x
-            if not self.rmsnorm:
-                y = y * self.act(z)  # (B D)
-        else:
-            # Discretize A and B (b (g n))
-
-            dA = torch.exp(dt * A)
-            x = rearrange(x, "b (h p) -> b h p", p=self.headdim)
-            dBx = torch.einsum("bh,bn,bhp->bhpn", dt, B, x)
-            ssm_state.copy_(ssm_state * rearrange(dA, "b h -> b h 1 1") + dBx)
-            y = torch.einsum("bhpn,bn->bhp", ssm_state.to(dtype), C)
-            y = y + rearrange(self.D.to(dtype), "h -> h 1") * x
-            y = rearrange(y, "b h p -> b (h p)")
-            if not self.rmsnorm:
-                y = y * self.act(z)  # (B D)
-
+        x = x.reshape(ntokens, batch, self.ngroups_local_tp, -1, self.headdim)    # (ntokens, batch, ngroups_local_tp, nheads_per_group, headdim)
+        B = B.reshape(ntokens, batch, self.ngroups_local_tp, 1, 1, self.d_state) #  (ntokens, batch, ngroups_local_tp,                1,       1, d_state)
+        C = C.reshape(ntokens, batch, self.ngroups_local_tp, 1, 1, self.d_state) #  (ntokens, batch, ngroups_local_tp, d_state)
+        D = self.D.reshape(1, 1, self.ngroups_local_tp, -1, 1)                   #  (      1,     1, ngroups_local_tp, nheads_per_group,       1)
+        dB_x = dt * B * x                                                         # (ntokens, batch, ngroups_local_tp, nheads_per_group, headdim, d_state)
+        ssm_state = ssm_state * dA + dB_x                                         # (ntokens, batch, ngroups_local_tp, nheads_per_group, headdim, d_state)
+        y = torch.einsum("lbd,lbgphd->lbgph", C, ssm_state)                       # (ntokens, batch, ngroups_local_tp, nheads_per_group, headdim)
+        y = y + D * x                                                             # (ntokens, batch, ngroups_local_tp, nheads_per_group, headdim)
+        y = y.reshape(ntokens, batch, -1)
         if self.rmsnorm:
             y = self.norm(y, z)
+        else
+            y = y * self.act(z)
 
         # b pd --> b d
         out, out_bias = self.out_proj(y)
-        return out.unsqueeze(0), out_bias, conv_state, ssm_state
+        return out, out_bias, ssm_state
     
-
-
-    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None):
-        """
-        allocate inference cache
-        """
-        device = self.out_proj.weight.device
-        conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
-        conv_state = torch.zeros(
-            batch_size, self.conv1d.weight.shape[0], self.d_conv, device=device, dtype=conv_dtype
-        )
-        ssm_dtype = self.in_proj.weight.dtype if dtype is None else dtype
-        # ssm_dtype = torch.float32
-        ssm_state = torch.zeros(
-            batch_size,
-            self.nheads_local_tp,
-            self.headdim,
-            self.d_state,
-            device=device,
-            dtype=ssm_dtype,
-        )
-        return conv_state, ssm_state
-
-    def _get_states_from_cache(self, inference_context, batch_size, *, inference_params=None):
-        """Initializes or retrieves the SSM state tensors from the cache.
-
-        At the start of any inference (at the prefill step), if there is no cache or if the
-        cached batch size has changed, then new tensors are initialized and stored in the cache.
-        Otherwise the existing tensors are retrieved from the cache and zeroed out.
-        """
-
-        inference_context = deprecate_inference_params(inference_context, inference_params)
-
-        assert inference_context is not None
-        assert self.layer_number is not None
-        if (
-            self.layer_number not in inference_context.key_value_memory_dict
-            or batch_size != self.cached_batch_size
-        ):
-            conv_state = torch.zeros(
-                batch_size,
-                self.conv1d.weight.shape[0],
-                self.d_conv,
-                device=self.conv1d.weight.device,
-                dtype=self.conv1d.weight.dtype,
-            )
-            ssm_state = torch.zeros(
-                batch_size,
-                self.nheads_local_tp,
-                self.headdim,
-                self.d_state,
-                device=self.in_proj.weight.device,
-                dtype=self.in_proj.weight.dtype,
-            )
-            inference_context.key_value_memory_dict[self.layer_number] = (conv_state, ssm_state)
-            self.cached_batch_size = batch_size
-        else:
-            conv_state, ssm_state = inference_context.key_value_memory_dict[self.layer_number]
-            # TODO: Remove reference to `inference_context.sequence_len_offset` for dynamic batching
-            if inference_context.sequence_len_offset == 0:
-                conv_state.zero_()
-                ssm_state.zero_()
-        return conv_state, ssm_state
 
     def sharded_state_dict(self, prefix="", sharded_offsets=(), metadata=None):
         """Provide a sharded state dictionary for distributed checkpointing."""

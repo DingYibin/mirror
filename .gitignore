@@ -11,4 +11,4 @@ wheels/
 
 # logs
 *.log
-logs/logs/
+logs/logs*/

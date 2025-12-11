@@ -8,9 +8,10 @@ import os
 4: remove eh_proj
 5: just move eh_proj to last
 6: remove embed input, keep eh_proj
+7: keep eh_proj, remove hidden states
 """
 MTP_EH_PROJ_MODE = int(os.environ.get("MTP_EH_PROJ_MODE", "0"))
-assert MTP_EH_PROJ_MODE >= 0 and MTP_EH_PROJ_MODE <= 6, f"MTP_EH_PROJ_MODE = {MTP_EH_PROJ_MODE}, which should be an integer in [0, 6].\n"
+assert MTP_EH_PROJ_MODE >= 0 and MTP_EH_PROJ_MODE <= 7, f"MTP_EH_PROJ_MODE = {MTP_EH_PROJ_MODE}, which should be an integer in [0, 6].\n"
 
 
 from contextlib import nullcontext
@@ -112,12 +113,12 @@ def MultiTokenPredictionLayer__init__(
         # so the output's shape should be [s, b, h].
         if self.eh_proj_mode in [1, 2, 3, 5]:
             eh_proj_input_hidden_size = self.config.hidden_size * 2
-        elif self.eh_proj_mode in [6]:
+        elif self.eh_proj_mode in [6, 7]:
             eh_proj_input_hidden_size = self.config.hidden_size
 
         if self.eh_proj_mode in [1, 2, 3]:
             eh_proj_output_hidden_size = self.config.hidden_size * 2
-        elif self.eh_proj_mode in [5, 6]:
+        elif self.eh_proj_mode in [5, 6, 7]:
             eh_proj_output_hidden_size = self.config.hidden_size
 
         self.eh_proj = build_module(
@@ -133,7 +134,7 @@ def MultiTokenPredictionLayer__init__(
         )
         if self.eh_proj_mode in [1, 2, 3]:
             self.activation_func = swiglu
-        elif self.eh_proj_mode in [5, 6]:
+        elif self.eh_proj_mode in [5, 6, 7]:
             self.activation_func = torch.nn.Identity()
     self.transformer_layer = build_module(
         self.submodules.transformer_layer, config=self.config, vp_stage=vp_stage
@@ -155,10 +156,14 @@ def MultiTokenPredictionLayer_concat_embeddings(self, hidden_states: torch.Tenso
     if self.eh_proj_mode == 4:
         return hidden_states
     # remove embed
-    if self.eh_proj_mode == 6:
+    if self.eh_proj_mode in [6, 7]:
+
         # decoder_input = self.enorm(decoder_input)
         # decoder_input = make_viewless_tensor(inp=decoder_input, requires_grad=True, keep_graph=True)
-        hidden_states = self.hnorm(hidden_states)
+        if self.eh_proj_mode == 6:
+            hidden_states = self.hnorm(hidden_states)
+        elif self.eh_proj_mode == 7:
+            hidden_states = self.enorm(decoder_input)
         hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
         # At the (k - 1)-th MTP module, concatenates the i-th tocken's hidden_states
         # and the (i + K)-th tocken's embedding, and combine them with linear projection.
@@ -328,7 +333,7 @@ if MTP_EH_PROJ_MODE >=1 and MTP_EH_PROJ_MODE <= 6:
     print("MultiTokenPredictionLayer.__init__ is replaced.\n", end="")
     MultiTokenPredictionLayer._concat_embeddings = MultiTokenPredictionLayer_concat_embeddings
     print("MultiTokenPredictionLayer._concat_embeddings is replaced.\n", end="")
-    if MTP_EH_PROJ_MODE != 6:
+    if MTP_EH_PROJ_MODE != 6 and MTP_EH_PROJ_MODE != 7:
         MultiTokenPredictionLayer._proj_and_transformer_layer = MultiTokenPredictionLayer_proj_and_transformer_layer
         print("MultiTokenPredictionLayer._proj_and_transformer_layer is replaced.\n", end="")
         MultiTokenPredictionBlock.forward = MultiTokenPredictionBlock_forward

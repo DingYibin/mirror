@@ -30,3 +30,6 @@ gpt3/train_gpt3_with_qwen3_tokenizer.sh \
 - 仅把eh_proj移动到最后，不加激活函数，mode 5，logs/logs-text/log_2025-1209-1745-21_1_2.log
     - 本次开始修改并行方式为TP4,并调大global batch size 为从32 改为 64，平均每DP 16, 设置micro batch size为8时OOM,为4时使用量约为131G 每卡 ，原始micro batch size设置为2，改小迭代步数（32768->16384），使用的sample量不变，单步迭代时间从3500ms+变为5500ms+-，倾向认为这种方式设置更好，后续可能调整
     - 本次开始移动文件夹位置，全局修改`/private/mirror`为`/workspace-dyb/mirror`，一般认为不能这样修改，当前看可以正常运行，出错时可以参考此条进行排查
+- MODE=0, TP4,DP4, 16384, 64， log_2025-1209-2036-00_1_2
+- MODE=6, TP4,DP4, 16384, 64， log_2025-1210-1910-19_1_2, remove embed input, keep eh_proj
+- MODE=1, TP4,DP4, 16384, 64，log_2025-1210-2129-34_1_2, move eh_proj to last, add swiglu

@@ -2,30 +2,30 @@ import re
 import os
 from torch.utils.tensorboard import SummaryWriter
 
-basic_path = "/workspace-dyb/mirror/logs/logs"
-
+basic_dir_path = "/workspace-dyb/mirror/logs/logs/tp8-dp2"
 
 logpath = "/workspace-dyb/mirror/log_2025-1206-1238-40_1_2.log"
-output_dir = "/workspace-dyb/mirror/logs/logs/eh_proj_add_embed"
 output_dir_name = "eh_proj_add_embed"
 
 logpath = "/workspace-dyb/mirror/log_2025-1205-2306-59_1_2.log"
-output_dir = "/workspace-dyb/mirror/logs/logs/eh_proj_move"
 output_dir_name = "eh_proj_move"
 
 logpath = "/workspace-dyb/mirror/log_2025-1204-1541-09_1_2.log"
-output_dir = "/workspace-dyb/mirror/logs/logs/eh_proj_move-old-lr"
 output_dir_name = "eh_proj_move-old-lr"
 
 logpath = "/workspace-dyb/mirror/log_2025-1203-1843-44_1_2.log"
-output_dir = "/workspace-dyb/mirror/logs/logs/mtp-old-lr"
 output_dir_name = "mtp-old-lr"
 
 logpath = "/workspace-dyb/mirror/log_2025-1207-1254-42_1_2.log"
-output_dir = "/workspace-dyb/mirror/logs/logs/mtp-remove-eh_proj"
 output_dir_name = "mtp-remove-eh_proj"
 
-output_dir = os.path.join(basic_path, output_dir_name)
+logpath = "/workspace-dyb/mirror/log_2025-1208-1150-13_1_2.log"
+output_dir_name = "eh_proj_add_hs"
+
+basic_dir_path = "/workspace-dyb/mirror/logs/logs/tp4-dp4"
+
+
+output_dir = os.path.join(basic_dir_path, output_dir_name)
 
 pattern = r'\[(.*?)\]\s+iteration\s+(\d+)/\s*\d+\s*\|\s*consumed samples:\s*(\d+)\s*\|\s*[^|]+\|\s*learning rate:\s*([\d\.E+-]+)\s*\|\s*[^|]+\|\s*lm loss:\s*([\d\.E+-]+)\s*\|\s*'
 
