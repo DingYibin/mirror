@@ -11,8 +11,8 @@ echo $LOGS_FILE
 EXPERIMENTS_DIR=/workspace-dyb/experiments
 
 # experiment
-EXPERIMENT_NAME=qwq-tp4-dp4-mtp-mode-1
-MTP_EH_PROJ_MODE=1
+EXPERIMENT_NAME=qwq-tp4-dp4-mtp-mode-7-real
+MTP_EH_PROJ_MODE=7
 
 gpt3/train_gpt3_with_qwen3_tokenizer_multinode-tp4.sh \
     ${EXPERIMENTS_DIR}/ckpt/${EXPERIMENT_NAME} \

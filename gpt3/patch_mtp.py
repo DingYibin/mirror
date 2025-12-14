@@ -9,9 +9,11 @@ import os
 5: just move eh_proj to last
 6: remove embed input, keep eh_proj
 7: keep eh_proj, remove hidden states
+8: remove self attn
 """
+import copy
 MTP_EH_PROJ_MODE = int(os.environ.get("MTP_EH_PROJ_MODE", "0"))
-assert MTP_EH_PROJ_MODE >= 0 and MTP_EH_PROJ_MODE <= 7, f"MTP_EH_PROJ_MODE = {MTP_EH_PROJ_MODE}, which should be an integer in [0, 6].\n"
+assert MTP_EH_PROJ_MODE >= 0 and MTP_EH_PROJ_MODE <= 8, f"MTP_EH_PROJ_MODE = {MTP_EH_PROJ_MODE}, which should be an integer in [0, 7].\n"
 
 
 from contextlib import nullcontext
@@ -43,13 +45,6 @@ if is_torch_min_version("1.13.0"):
 else:
     dist_all_gather_func = torch.distributed._all_gather_base
 
-SUPPORTED_ATTN_MASK = [
-    AttnMaskType.padding,
-    AttnMaskType.causal,
-    AttnMaskType.no_mask,
-    AttnMaskType.padding_causal,
-]
-
 
 from megatron.core.transformer.multi_token_prediction import (
     MultiTokenPredictionLayer,
@@ -64,6 +59,18 @@ from megatron.core.transformer.multi_token_prediction import (
 def swiglu(x):
     x = torch.chunk(x, 2, dim=-1)
     return torch.nn.functional.silu(x[0]) * x[1]
+
+class IdentityOpTwoOutput(torch.nn.Module):
+    """
+    This is a placeholder for IdentityOp(x) -> x
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+    def forward(self, x, *args, **kwargs):
+        return x, x
+
 
 def MultiTokenPredictionLayer__init__(
     self,
@@ -111,14 +118,14 @@ def MultiTokenPredictionLayer__init__(
         # so the input's shape is [s, b, 2*h].
         # The output will be send to the following transformer layer,
         # so the output's shape should be [s, b, h].
-        if self.eh_proj_mode in [1, 2, 3, 5]:
+        if self.eh_proj_mode in [1, 2, 3, 5, 8]:
             eh_proj_input_hidden_size = self.config.hidden_size * 2
         elif self.eh_proj_mode in [6, 7]:
             eh_proj_input_hidden_size = self.config.hidden_size
 
         if self.eh_proj_mode in [1, 2, 3]:
             eh_proj_output_hidden_size = self.config.hidden_size * 2
-        elif self.eh_proj_mode in [5, 6, 7]:
+        elif self.eh_proj_mode in [5, 6, 7, 8]:
             eh_proj_output_hidden_size = self.config.hidden_size
 
         self.eh_proj = build_module(
@@ -134,10 +141,14 @@ def MultiTokenPredictionLayer__init__(
         )
         if self.eh_proj_mode in [1, 2, 3]:
             self.activation_func = swiglu
-        elif self.eh_proj_mode in [5, 6, 7]:
+        elif self.eh_proj_mode in [5, 6, 7, 8]:
             self.activation_func = torch.nn.Identity()
+    transformer_layer_modules = copy.deepcopy(self.submodules.transformer_layer)
+    if self.eh_proj_mode == 8:
+        from megatron.core.transformer.identity_op import IdentityFuncOp, IdentityOp 
+        transformer_layer_modules.submodules.self_attention = IdentityOpTwoOutput
     self.transformer_layer = build_module(
-        self.submodules.transformer_layer, config=self.config, vp_stage=vp_stage
+        transformer_layer_modules, config=self.config, vp_stage=vp_stage
     )
 
     self.final_layernorm = build_module(
@@ -328,12 +339,13 @@ def MultiTokenPredictionBlock_forward(
 
 
 
-if MTP_EH_PROJ_MODE >=1 and MTP_EH_PROJ_MODE <= 6:
+if MTP_EH_PROJ_MODE >=1 and MTP_EH_PROJ_MODE <= 8:
     MultiTokenPredictionLayer.__init__ = MultiTokenPredictionLayer__init__
     print("MultiTokenPredictionLayer.__init__ is replaced.\n", end="")
-    MultiTokenPredictionLayer._concat_embeddings = MultiTokenPredictionLayer_concat_embeddings
-    print("MultiTokenPredictionLayer._concat_embeddings is replaced.\n", end="")
-    if MTP_EH_PROJ_MODE != 6 and MTP_EH_PROJ_MODE != 7:
+    if MTP_EH_PROJ_MODE != 8:
+        MultiTokenPredictionLayer._concat_embeddings = MultiTokenPredictionLayer_concat_embeddings
+        print("MultiTokenPredictionLayer._concat_embeddings is replaced.\n", end="")
+    if MTP_EH_PROJ_MODE != 6 and MTP_EH_PROJ_MODE != 7 and MTP_EH_PROJ_MODE != 8:
         MultiTokenPredictionLayer._proj_and_transformer_layer = MultiTokenPredictionLayer_proj_and_transformer_layer
         print("MultiTokenPredictionLayer._proj_and_transformer_layer is replaced.\n", end="")
         MultiTokenPredictionBlock.forward = MultiTokenPredictionBlock_forward

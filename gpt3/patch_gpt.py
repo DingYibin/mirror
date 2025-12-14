@@ -216,6 +216,13 @@ class OnlyMTPGPTModel(GPTModel):
             )
             target_prob.div_(sum_target_prob.unsqueeze(dim=-1))
             target_prob = target_prob.detach()
+            target_log = target_prob.log()
+            ideal_loss = (target_log * target_prob).sum(dim=-1)
+            torch.distributed.all_reduce(
+                ideal_loss,
+                op=torch.distributed.ReduceOp.SUM,
+                group=get_tensor_model_parallel_group(),
+            )
 
             if loss_mask is None:
                 # if loss_mask is not provided, use all ones as loss_mask

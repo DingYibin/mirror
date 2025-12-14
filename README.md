@@ -33,3 +33,5 @@ gpt3/train_gpt3_with_qwen3_tokenizer.sh \
 - MODE=0, TP4,DP4, 16384, 64， log_2025-1209-2036-00_1_2
 - MODE=6, TP4,DP4, 16384, 64， log_2025-1210-1910-19_1_2, remove embed input, keep eh_proj
 - MODE=1, TP4,DP4, 16384, 64，log_2025-1210-2129-34_1_2, move eh_proj to last, add swiglu
+- MODE=7, TP4,DP4, 16384, 64，log_2025-1212-0906-39_1_2, remove hidden states from target model
+- MODE=8, log_2025-1212-1239-34_1_2, remove self attention
