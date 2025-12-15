@@ -13,8 +13,7 @@ import os
 """
 import copy
 MTP_EH_PROJ_MODE = int(os.environ.get("MTP_EH_PROJ_MODE", "0"))
-assert MTP_EH_PROJ_MODE >= 0 and MTP_EH_PROJ_MODE <= 8, f"MTP_EH_PROJ_MODE = {MTP_EH_PROJ_MODE}, which should be an integer in [0, 7].\n"
-
+NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER = int(os.environ.get("NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER", "1"))
 
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -54,6 +53,7 @@ from megatron.core.transformer.multi_token_prediction import (
     ModelCommProcessGroups,
     SUPPORTED_ATTN_MASK,
     MegatronModule,
+    roll_tensor,
 )
 
 def swiglu(x):
@@ -96,8 +96,11 @@ def MultiTokenPredictionLayer__init__(
     )
 
     self.eh_proj_mode = MTP_EH_PROJ_MODE
+    self.num_transformer_block_one_mtp_layer = NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER
+    assert self.eh_proj_mode != 10 or self.num_transformer_block_one_mtp_layer > 0, f"MTP_EH_PROJ_MODE = {self.eh_proj_mode}, NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER should be geater than 0, which is {self.num_transformer_block_one_mtp_layer}"
 
-    if self.eh_proj_mode != 4:
+
+    if self.eh_proj_mode in [1, 2, 3, 5, 6, 7, 8, 9] or (self.eh_proj_mode == 10 and (self.layer_number - 1) % self.num_transformer_block_one_mtp_layer == 0):
 
         self.enorm = build_module(
             self.submodules.enorm,
@@ -118,14 +121,14 @@ def MultiTokenPredictionLayer__init__(
         # so the input's shape is [s, b, 2*h].
         # The output will be send to the following transformer layer,
         # so the output's shape should be [s, b, h].
-        if self.eh_proj_mode in [1, 2, 3, 5, 8]:
+        if self.eh_proj_mode in [1, 2, 3, 5, 8, 9, 10]:
             eh_proj_input_hidden_size = self.config.hidden_size * 2
         elif self.eh_proj_mode in [6, 7]:
             eh_proj_input_hidden_size = self.config.hidden_size
 
         if self.eh_proj_mode in [1, 2, 3]:
             eh_proj_output_hidden_size = self.config.hidden_size * 2
-        elif self.eh_proj_mode in [5, 6, 7, 8]:
+        elif self.eh_proj_mode in [5, 6, 7, 8, 9, 10]:
             eh_proj_output_hidden_size = self.config.hidden_size
 
         self.eh_proj = build_module(
@@ -141,44 +144,81 @@ def MultiTokenPredictionLayer__init__(
         )
         if self.eh_proj_mode in [1, 2, 3]:
             self.activation_func = swiglu
-        elif self.eh_proj_mode in [5, 6, 7, 8]:
+        elif self.eh_proj_mode in [5, 6, 7, 8, 9, 10]:
             self.activation_func = torch.nn.Identity()
     transformer_layer_modules = copy.deepcopy(self.submodules.transformer_layer)
-    if self.eh_proj_mode == 8:
-        from megatron.core.transformer.identity_op import IdentityFuncOp, IdentityOp 
+    if self.eh_proj_mode == 8 or (self.eh_proj_mode == 9 and layer_number > 1):
         transformer_layer_modules.submodules.self_attention = IdentityOpTwoOutput
     self.transformer_layer = build_module(
         transformer_layer_modules, config=self.config, vp_stage=vp_stage
     )
-
-    self.final_layernorm = build_module(
-        self.submodules.layer_norm,
-        config=self.config,
-        hidden_size=self.config.hidden_size,
-        eps=self.config.layernorm_epsilon,
-    )
+    if self.eh_proj_mode == 10 and self.layer_number % self.num_transformer_block_one_mtp_layer != 0:
+        self.final_layernorm = torch.nn.Identity()
+    else:
+        self.final_layernorm = build_module(
+            self.submodules.layer_norm,
+            config=self.config,
+            hidden_size=self.config.hidden_size,
+            eps=self.config.layernorm_epsilon,
+        )
     self.offload_context = nullcontext()
+
+def MultiTokenPredictionLayer_get_embeddings(
+    self,
+    input_ids: torch.Tensor,
+    position_ids: torch.Tensor,
+    embedding: Callable,
+    hidden_states: torch.Tensor,
+):
+    """
+    Preprocesses input data for the Multi-Token Prediction (MTP) layers.
+
+    This function computes the decoder input and sends updated input_ids and position_ids to
+    the next layer.
+
+    Args:
+        input_ids (torch.Tensor): The input token IDs.
+        position_ids (torch.Tensor): The position IDs corresponding to the input tokens.
+        embedding (Callable): The embedding module
+            from gpt model to compute the decoder input.
+        hidden_states (torch.Tensor): hidden states tensor of shape [s, b, h] where s is the
+            sequence length, b is the batch size, and h is the hidden size.
+    """
+    if self.eh_proj_mode != 10  or (self.eh_proj_mode == 10 and (self.layer_number - 1) % self.num_transformer_block_one_mtp_layer == 0):
+        # Calc logits for the current Multi-Token Prediction (MTP) layers.
+        input_ids, _ = roll_tensor(input_ids, shifts=-1, dims=-1, cp_group=self.cp_group)
+        position_ids, _ = roll_tensor(position_ids, shifts=-1, dims=-1, cp_group=self.cp_group)
+    # embedding
+    decoder_input = embedding(input_ids=input_ids, position_ids=position_ids)
+
+    hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
+
+    return input_ids, position_ids, decoder_input, hidden_states
 
 def MultiTokenPredictionLayer_concat_embeddings(self, hidden_states: torch.Tensor, decoder_input: torch.Tensor):
     """
     Concatenate the tokens before sending to transformer layer.
     """
     # just remove eh_proj
-    if self.eh_proj_mode == 4:
+    if self.eh_proj_mode == 4 or (self.eh_proj_mode == 10 and (self.layer_number - 1) % self.num_transformer_block_one_mtp_layer != 0):
         return hidden_states
-    # remove embed
-    if self.eh_proj_mode in [6, 7]:
-
-        # decoder_input = self.enorm(decoder_input)
-        # decoder_input = make_viewless_tensor(inp=decoder_input, requires_grad=True, keep_graph=True)
+    if self.eh_proj_mode in [6, 7, 10]:
         if self.eh_proj_mode == 6:
+            # remove embed
             hidden_states = self.hnorm(hidden_states)
+            hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
         elif self.eh_proj_mode == 7:
             hidden_states = self.enorm(decoder_input)
-        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
-        # At the (k - 1)-th MTP module, concatenates the i-th tocken's hidden_states
-        # and the (i + K)-th tocken's embedding, and combine them with linear projection.
-        # hidden_states = torch.cat((decoder_input, hidden_states), -1)
+            hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
+        elif self.eh_proj_mode == 10:
+            decoder_input = self.enorm(decoder_input)
+            decoder_input = make_viewless_tensor(inp=decoder_input, requires_grad=True, keep_graph=True)
+            hidden_states = self.hnorm(hidden_states)
+            hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
+            # At the (k - 1)-th MTP module, concatenates the i-th tocken's hidden_states
+            # and the (i + K)-th tocken's embedding, and combine them with linear projection.
+            hidden_states = torch.cat((decoder_input, hidden_states), -1)
+
         hidden_states, _ = self.eh_proj(hidden_states)
         # For tensor parallel we need to gather the tensor across the model-parallel
         # ranks after the linear projection. This used to call
@@ -328,7 +368,10 @@ def MultiTokenPredictionBlock_forward(
             embedding=embedding,
             **(extra_block_kwargs or {}),
         )
-        hidden_states, out_hidden_states = hidden_states_re
+        if isinstance(hidden_states_re, tuple):
+            hidden_states, out_hidden_states = hidden_states_re
+        else:
+            hidden_states, out_hidden_states = hidden_states_re, hidden_states_re # MODE 10
         # append the output hidden states of the current mtp layer
         # to the hidden_states_list
         hidden_states_list.append(out_hidden_states)
@@ -338,17 +381,23 @@ def MultiTokenPredictionBlock_forward(
     return hidden_states
 
 
-
-if MTP_EH_PROJ_MODE >=1 and MTP_EH_PROJ_MODE <= 8:
+patched_info = f"{MTP_EH_PROJ_MODE = }\n{NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER = }\n"
+if MTP_EH_PROJ_MODE in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
     MultiTokenPredictionLayer.__init__ = MultiTokenPredictionLayer__init__
-    print("MultiTokenPredictionLayer.__init__ is replaced.\n", end="")
-    if MTP_EH_PROJ_MODE != 8:
-        MultiTokenPredictionLayer._concat_embeddings = MultiTokenPredictionLayer_concat_embeddings
-        print("MultiTokenPredictionLayer._concat_embeddings is replaced.\n", end="")
-    if MTP_EH_PROJ_MODE != 6 and MTP_EH_PROJ_MODE != 7 and MTP_EH_PROJ_MODE != 8:
-        MultiTokenPredictionLayer._proj_and_transformer_layer = MultiTokenPredictionLayer_proj_and_transformer_layer
-        print("MultiTokenPredictionLayer._proj_and_transformer_layer is replaced.\n", end="")
-        MultiTokenPredictionBlock.forward = MultiTokenPredictionBlock_forward
-        print("MultiTokenPredictionBlock.forward is replaced.\n", end="")
+    patched_info += "MultiTokenPredictionLayer.__init__ is replaced.\n"
+if MTP_EH_PROJ_MODE in [                           10]:
+    MultiTokenPredictionLayer._get_embeddings = MultiTokenPredictionLayer_get_embeddings
+    patched_info += "MultiTokenPredictionLayer._get_embeddings is replaced.\n"
+# if MTP_EH_PROJ_MODE not in [8, 9]:
+if MTP_EH_PROJ_MODE in [1, 2, 3, 4, 5, 6, 7,       10]:
+    MultiTokenPredictionLayer._concat_embeddings = MultiTokenPredictionLayer_concat_embeddings
+    patched_info += "MultiTokenPredictionLayer._concat_embeddings is replaced.\n"
+# if MTP_EH_PROJ_MODE not in [6, 7, 8, 9]:
+if MTP_EH_PROJ_MODE in [1, 2, 3, 4, 5,               ]:
+    MultiTokenPredictionLayer._proj_and_transformer_layer = MultiTokenPredictionLayer_proj_and_transformer_layer
+    patched_info += "MultiTokenPredictionLayer._proj_and_transformer_layer is replaced.\n"
+    MultiTokenPredictionBlock.forward = MultiTokenPredictionBlock_forward
+    patched_info += "MultiTokenPredictionBlock.forward is replaced.\n"
 
-print("Patch to move eh_proj has been applied!\n", end="", flush=True)
+patched_info += "Patch to move eh_proj has been applied!\n"
+print(patched_info, end="", flush=True)

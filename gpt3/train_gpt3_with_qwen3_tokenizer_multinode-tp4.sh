@@ -83,11 +83,15 @@ elif [ $MODEL_SIZE = QWQ32B ]; then
     RMS_NORM_EPS=1e-5
     TP=4
     TOEKENIZER_MODEL="/public/llm_models/Qwen/QwQ-32B"
+    MTP_NUM_LAYERS=7
+    if [ $MTP_EH_PROJ_MODE = 10 ]; then
+        MTP_NUM_LAYERS=14
+    fi
     EXTRA_ARGS=" \
         --untie-embeddings-and-output-weights \
         --add-qkv-bias \
         --rotary-seq-len-interpolation-factor 1 \
-        --mtp-num-layers 7 \
+        --mtp-num-layers ${MTP_NUM_LAYERS} \
         --main-model-checkpoint /workspace-dyb/qwen-ckpts/QwQ-32B-hf-to-mcore-te-tp4-pp1/release \
         --mtp-loss-scaling-factor 1.0 \
     "
@@ -111,11 +115,16 @@ fi
 
 NUM_TRAIN_ITERATIONS=16384
 SAVE_INTERVAL=8192
+GLOBAL_BATCH_SIZE=64
+MICRO_BATCH_SIZE=4
 if [ $NUM_NODES = 1 ]; then
-    NUM_TRAIN_ITERATIONS=2048
+    NUM_TRAIN_ITERATIONS=3072
     SAVE_INTERVAL=1024
+    GLOBAL_BATCH_SIZE=32
 fi
-
+if [ $MTP_EH_PROJ_MODE = 10 ]; then
+    MICRO_BATCH_SIZE=2
+fi
 TRAINING_ARGS=(
     --micro-batch-size 2 
     --global-batch-size 32 
@@ -146,8 +155,8 @@ if [ $TRAIN_MTP_ONLY = 1 ]; then
         EXTRA_ARGS=${EXTRA_ARGS}" --lr-decay-style cosine  --lr-decay-iters "${NUM_DECAY_ITERATIONS}
     fi
     TRAINING_ARGS=(
-        --micro-batch-size 4 
-        --global-batch-size 64 
+        --micro-batch-size $MICRO_BATCH_SIZE 
+        --global-batch-size $GLOBAL_BATCH_SIZE 
         # --rampup-batch-size 16 16 5859375 
         # --train-samples 262144
         --train-iters $NUM_TRAIN_ITERATIONS

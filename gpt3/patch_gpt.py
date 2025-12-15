@@ -2,7 +2,7 @@
 
 from collections import OrderedDict
 from typing import Dict, Literal, Optional
-
+import os
 import torch
 from torch import Tensor
 
@@ -23,7 +23,6 @@ from megatron.core.tensor_parallel import gather_from_sequence_parallel_region
 from megatron.core.transformer.enums import ModelType
 from megatron.core.transformer.multi_token_prediction import (
     MTPLossAutoScaler,
-    MTPLossLoggingHelper,
     MultiTokenPredictionBlock,
     roll_tensor,
     tie_output_layer_state_dict,
@@ -107,6 +106,84 @@ def parallel_cross_entropy(mtp_logits, target_prob):
     return _ParallelCrossEntropy.apply(mtp_logits, target_prob)
 
 
+MTP_EH_PROJ_MODE = int(os.environ.get("MTP_EH_PROJ_MODE", "0"))
+NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER = int(os.environ.get("NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER", "1"))
+
+class MTPLossLoggingHelper:
+    """Helper class for logging MTP losses."""
+
+    tracker = {}
+
+    @staticmethod
+    def save_loss_to_tracker(
+        loss: torch.Tensor,
+        layer_number: int,
+        num_layers: int,
+        reduce_group: torch.distributed.ProcessGroup = None,
+        avg_group: torch.distributed.ProcessGroup = None,
+    ):
+        """Save the mtp loss for logging.
+        Args:
+            loss (torch.Tensor): The loss tensor.
+            layer_number (int): Layer index of the loss.
+            num_layers (int): The number of total layers.
+            reduce_group (torch.distributed.ProcessGroup): The group for reducing the loss.
+            mean_group (torch.distributed.ProcessGroup): The group for averaging the loss.
+        """
+        # Skip mtp loss logging if layer_number is None.
+        if layer_number is None:
+            return
+
+        tracker = MTPLossLoggingHelper.tracker
+        if "values" not in tracker:
+            tracker["values"] = torch.zeros(num_layers + 1, device=torch.cuda.current_device())
+        tracker["values"][layer_number] += loss.detach()
+        tracker["reduce_group"] = reduce_group
+        tracker["avg_group"] = avg_group
+
+    def clean_loss_in_tracker():
+        """Clear the mtp losses."""
+        tracker = MTPLossLoggingHelper.tracker
+        tracker["values"].zero_()
+        tracker["reduce_group"] = None
+        tracker["avg_group"] = None
+
+    def reduce_loss_in_tracker():
+        """Collect and reduce the mtp losses across ranks."""
+        tracker = MTPLossLoggingHelper.tracker
+        if "values" not in tracker:
+            return
+        values = tracker["values"]
+        # Reduce mtp losses across ranks.
+        if tracker.get('reduce_group') is not None:
+            torch.distributed.all_reduce(values, group=tracker.get('reduce_group'))
+        if tracker.get('avg_group') is not None:
+            torch.distributed.all_reduce(
+                values, group=tracker['avg_group'], op=torch.distributed.ReduceOp.AVG
+            )
+
+    def track_mtp_metrics(loss_scale, iteration, writer, wandb_writer=None, total_loss_dict=None):
+        """Track the Multi-Token Prediction (MTP) metrics for logging."""
+        MTPLossLoggingHelper.reduce_loss_in_tracker()
+        tracker = MTPLossLoggingHelper.tracker
+        if "values" not in tracker:
+            return
+        mtp_losses = tracker["values"] * loss_scale
+        mtp_num_layers = mtp_losses.shape[0]
+        for i in range(mtp_num_layers):
+            name = f"mtp_{i} loss" if i > 0 else "ideal loss"
+            loss = mtp_losses[i]
+            if total_loss_dict is not None:
+                if name in total_loss_dict:
+                    total_loss_dict[name] += loss
+                else:
+                    total_loss_dict[name] = loss
+            if writer is not None:
+                writer.add_scalar(name, loss, iteration)
+            if wandb_writer is not None:
+                wandb_writer.log({f"{name}": loss}, iteration)
+
+        MTPLossLoggingHelper.clean_loss_in_tracker()
 
 class OnlyMTPGPTModel(GPTModel):
 
@@ -206,7 +283,7 @@ class OnlyMTPGPTModel(GPTModel):
                 target_logits_max, op=torch.distributed.ReduceOp.MAX, group=get_tensor_model_parallel_group()
             )
             target_logits -= target_logits_max.unsqueeze(dim=-1)
-            target_prob = target_logits
+            target_prob = target_logits.clone()
             torch.exp(target_logits, out=target_prob)
             sum_target_prob = target_prob.sum(dim=-1)
             torch.distributed.all_reduce(
@@ -216,22 +293,41 @@ class OnlyMTPGPTModel(GPTModel):
             )
             target_prob.div_(sum_target_prob.unsqueeze(dim=-1))
             target_prob = target_prob.detach()
-            target_log = target_prob.log()
-            ideal_loss = (target_log * target_prob).sum(dim=-1)
+            target_logits = (target_logits - sum_target_prob.log().unsqueeze(dim=-1)).detach()
+            ideal_loss = -(target_logits * target_prob).sum(dim=-1)
             torch.distributed.all_reduce(
                 ideal_loss,
                 op=torch.distributed.ReduceOp.SUM,
                 group=get_tensor_model_parallel_group(),
             )
 
+
             if loss_mask is None:
                 # if loss_mask is not provided, use all ones as loss_mask
                 loss_mask = torch.ones_like(mtp_labels)
             # loss_mask[:, :loss_mask.shape[1] // 2].fill_(0)
-            for mtp_layer_number in range(self.config.mtp_num_layers):
+
+            mtp_num_layers = self.config.mtp_num_layers
+            mtp_num_layers_step = 1
+            if MTP_EH_PROJ_MODE == 10 and NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER > 1:
+                mtp_num_layers = self.config.mtp_num_layers // NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER
+                mtp_num_layers_step = NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER
+
+            if self.training:
+                MTPLossLoggingHelper.save_loss_to_tracker(
+                    torch.sum(ideal_loss) / loss_mask.sum(),
+                    0,
+                    mtp_num_layers,
+                    avg_group=parallel_state.get_data_parallel_group(
+                        with_context_parallel=True
+                    ),
+                )
+
+            for i in range(mtp_num_layers):
+                mtp_layer_number = (i + 1) * mtp_num_layers_step - 1
                 # output
                 mtp_logits, _ = self.output_layer(
-                    hidden_states_list[mtp_layer_number + 1],
+                    hidden_states_list[mtp_layer_number],
                     weight=output_weight,
                     runtime_gather_output=runtime_gather_output,
                 )
@@ -248,13 +344,13 @@ class OnlyMTPGPTModel(GPTModel):
                     # after moving loss logging to loss_func in pretrain_gpt.py
                     MTPLossLoggingHelper.save_loss_to_tracker(
                         torch.sum(mtp_loss) / num_tokens,
-                        mtp_layer_number,
-                        self.config.mtp_num_layers,
+                        i + 1,
+                        mtp_num_layers,
                         avg_group=parallel_state.get_data_parallel_group(
                             with_context_parallel=True
                         ),
                     )
-                mtp_loss_scale = self.config.mtp_loss_scaling_factor / self.config.mtp_num_layers
+                mtp_loss_scale = self.config.mtp_loss_scaling_factor / mtp_num_layers
                 if self.config.calculate_per_token_loss:
                     logits = MTPLossAutoScaler.apply(
                         logits, mtp_loss_scale * mtp_loss

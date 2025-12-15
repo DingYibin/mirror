@@ -23,20 +23,23 @@ from functools import partial
 from typing import List, Optional, Tuple, Union
 
 """
-0: original
-1: move eh_proj to last, add swiglu
-2: move_eh_proj to last and add to embeddings, add swiglu
-3: move_eh_proj to last and add to hidden states, add swiglu
-4: remove eh_proj
-5: just move eh_proj to last
-6: remove embed input, keep eh_proj
-7: keep eh_proj, remove hidden states
-8: remove self attn
-9: multi transformer layers
+ 0: original
+ 1: move eh_proj to last, add swiglu
+ 2: move_eh_proj to last and add to embeddings, add swiglu
+ 3: move_eh_proj to last and add to hidden states, add swiglu
+ 4: remove eh_proj
+ 5: just move eh_proj to last
+ 6: remove embed input, keep eh_proj
+ 7: keep eh_proj, remove hidden states
+ 8: remove self attn
+ 9: remove self attn after mtp 1
+10: use softmax(logits) * embeddings as input, NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER
 """
 MTP_EH_PROJ_MODE = int(os.environ.get("MTP_EH_PROJ_MODE", "0"))
-print(f"MTP_EH_PROJ_MODE = {os.environ.get("MTP_EH_PROJ_MODE", "0")}\n", end="")
-assert MTP_EH_PROJ_MODE >= 0 and MTP_EH_PROJ_MODE <= 9, f"MTP_EH_PROJ_MODE = {MTP_EH_PROJ_MODE}, which should be an integer in [0, 9].\n"
+NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER = int(os.environ.get("NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER", "1"))
+print(f"MTP_EH_PROJ_MODE = {MTP_EH_PROJ_MODE}\n"
+      f"NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER = {NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER}\n", end="")
+assert MTP_EH_PROJ_MODE >= 0 and MTP_EH_PROJ_MODE <= 10, f"MTP_EH_PROJ_MODE = {MTP_EH_PROJ_MODE}, which should be an integer in [0, 9].\n"
 
 
 if os.environ.get("MTP_EH_PROJ_MODE", "0") != "0":
