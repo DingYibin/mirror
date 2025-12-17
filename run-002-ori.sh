@@ -11,11 +11,11 @@ echo $LOGS_FILE
 EXPERIMENTS_DIR=/workspace-dyb/experiments
 
 # experiment
-EXPERIMENT_NAME=qwq-tp4-dp4-mtp-mode-10-2-1216
+EXPERIMENT_NAME=qwq-tp4-dp4-mtp-mode-10
 MTP_EH_PROJ_MODE=10
 export NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER=2
 
-gpt3/train_gpt3_with_qwen3_tokenizer_multinode-tp4-mode-10-2.sh \
+gpt3/train_gpt3_with_qwen3_tokenizer_multinode-tp4.sh \
     ${EXPERIMENTS_DIR}/ckpt/${EXPERIMENT_NAME} \
     ${EXPERIMENTS_DIR}/log/${EXPERIMENT_NAME} \
     /workspace-dyb/converted_dataset/a-m-team/merged-r1-dataset \

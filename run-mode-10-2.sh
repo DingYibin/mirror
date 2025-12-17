@@ -11,7 +11,7 @@ echo $LOGS_FILE
 EXPERIMENTS_DIR=/workspace-dyb/experiments
 
 # experiment
-EXPERIMENT_NAME=qwq-tp4-dp4-mtp-mode-10-2-1216
+EXPERIMENT_NAME=qwq-tp4-dp4-mtp-mode-10
 MTP_EH_PROJ_MODE=10
 export NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER=2
 
