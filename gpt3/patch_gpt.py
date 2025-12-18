@@ -323,11 +323,11 @@ class OnlyMTPGPTModel(GPTModel):
                     ),
                 )
 
-            for i in range(mtp_num_layers):
-                mtp_layer_number = (i + 1) * mtp_num_layers_step - 1
+            for mtp_layer_number in range(mtp_num_layers):
+                hidden_states_index = (mtp_layer_number + 1) * mtp_num_layers_step
                 # output
                 mtp_logits, _ = self.output_layer(
-                    hidden_states_list[mtp_layer_number],
+                    hidden_states_list[hidden_states_index],
                     weight=output_weight,
                     runtime_gather_output=runtime_gather_output,
                 )
@@ -344,7 +344,7 @@ class OnlyMTPGPTModel(GPTModel):
                     # after moving loss logging to loss_func in pretrain_gpt.py
                     MTPLossLoggingHelper.save_loss_to_tracker(
                         torch.sum(mtp_loss) / num_tokens,
-                        i + 1,
+                        mtp_layer_number + 1,
                         mtp_num_layers,
                         avg_group=parallel_state.get_data_parallel_group(
                             with_context_parallel=True

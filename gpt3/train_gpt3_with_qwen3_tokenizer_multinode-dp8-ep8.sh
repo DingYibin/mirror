@@ -34,185 +34,191 @@ EXTRA_ARGS=" "
 MODEL_PARALLEL_ARGS=(
 	--pipeline-model-parallel-size 1 
 )
-if [ $MODEL_SIZE = 0.6B ]; then
-    NUM_LAYERS=28
-    HIDDEN_SIZE=1024
-    NUM_ATTENTION_HEADS=16
-    INTERMEDIATE_SIZE=3072
-    NUM_KEY_VALUE_HEADS=8
-    MAX_POSITION_EMBEDDINGS=40960
-    VOCAB_SIZE=151936
-    ROPE_THETA=1000000
-    RMS_NORM_EPS=1e-6
-    MODEL_PARALLEL_ARGS+=(
-        --tensor-model-parallel-size 1
-    )
-    TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Instruct-2507
-    EXTRA_ARGS="--qk-layernorm"
-elif [ $MODEL_SIZE = 1.7B ]; then
-    NUM_LAYERS=28
-    HIDDEN_SIZE=2048
-    NUM_ATTENTION_HEADS=16
-    INTERMEDIATE_SIZE=6144
-    NUM_KEY_VALUE_HEADS=8
-    MAX_POSITION_EMBEDDINGS=40960
-    VOCAB_SIZE=151936
-    ROPE_THETA=1000000
-    RMS_NORM_EPS=1e-6
-    MODEL_PARALLEL_ARGS+=(
-        --tensor-model-parallel-size 1
-    )
-    TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Instruct-2507
-    EXTRA_ARGS="--qk-layernorm"
-elif [ $MODEL_SIZE = 8B ]; then
-    NUM_LAYERS=36
-    HIDDEN_SIZE=4096
-    NUM_ATTENTION_HEADS=32
-    INTERMEDIATE_SIZE=12288
-    NUM_KEY_VALUE_HEADS=8
-    MAX_POSITION_EMBEDDINGS=40960
-    VOCAB_SIZE=151936
-    ROPE_THETA=1000000
-    RMS_NORM_EPS=1e-6
-    MODEL_PARALLEL_ARGS+=(
-        --tensor-model-parallel-size 2
-    )
-    TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Instruct-2507
-    EXTRA_ARGS=" --untie-embeddings-and-output-weights --qk-layernorm"
-elif [ $MODEL_SIZE = QWQ32B ]; then
-    NUM_LAYERS=64
-    HIDDEN_SIZE=5120
-    NUM_ATTENTION_HEADS=40
-    INTERMEDIATE_SIZE=27648
-    NUM_KEY_VALUE_HEADS=8
-    MAX_POSITION_EMBEDDINGS=131072
-    EXTRA_VOCAB_SIZE=421
-    VOCAB_SIZE=151936
-    ROPE_THETA=1000000
-    RMS_NORM_EPS=1e-5
-    MODEL_PARALLEL_ARGS+=(
-        --tensor-model-parallel-size 4
-    )
-    TOEKENIZER_MODEL="/public/llm_models/Qwen/QwQ-32B"
-    MTP_NUM_LAYERS=7
-    if [ $MTP_EH_PROJ_MODE = 10 ]; then
-        MTP_NUM_LAYERS=14
-    fi
-    EXTRA_ARGS=" \
-        --untie-embeddings-and-output-weights \
-        --add-qkv-bias \
-        --rotary-seq-len-interpolation-factor 1 \
-        --mtp-num-layers ${MTP_NUM_LAYERS} \
-        --main-model-checkpoint /workspace-dyb/qwen-ckpts/QwQ-32B-hf-to-mcore-te-tp4-pp1/release \
-        --mtp-loss-scaling-factor 1.0 \
-    "
-elif [ $MODEL_SIZE = A3B ]; then
-    MODEL_PARALLEL_ARGS+=(
-        --tensor-model-parallel-size 1
-        --expert-model-parallel-size 8
-    )
-else
-    echo "MODEL_SIZE=${MODEL_SIZE} is not supported"
-    exit
-fi
-
-
-NUM_TRAIN_ITERATIONS=16384
-SAVE_INTERVAL=8192
-GLOBAL_BATCH_SIZE=64
-MICRO_BATCH_SIZE=4
-if [ $NUM_NODES = 1 ]; then
-    NUM_TRAIN_ITERATIONS=3072
-    SAVE_INTERVAL=1024
-    GLOBAL_BATCH_SIZE=32
-fi
-if [ $MTP_EH_PROJ_MODE = 10 ]; then
-    MICRO_BATCH_SIZE=2
-fi
-TRAINING_ARGS=(
-    --micro-batch-size 2 
-    --global-batch-size 32 
-    # --rampup-batch-size 16 16 5859375 
-    # --train-samples 262144
-    --train-iters $NUM_TRAIN_ITERATIONS
-    --weight-decay 0.1 
-    --adam-beta1 0.9 
-    --adam-beta2 0.95 
-    --init-method-std 0.008 
-    --clip-grad 1.0 
-    --bf16
-    --lr 1.0e-4 
-    --lr-decay-style cosine 
-    --min-lr 1.0e-5
-    --lr-warmup-fraction .001 
-    --lr-decay-iters 3000 
-    --no-gradient-accumulation-fusion
-    --seq-length 4096
-)
-
-if [ $TRAIN_MTP_ONLY = 1 ]; then
-    EXTRA_ARGS=${EXTRA_ARGS}" --train-mtp-only --convert-checkpoint"
-    if [ $MTP_EH_PROJ_MODE = 0 ]; then
-        EXTRA_ARGS=${EXTRA_ARGS}" --lr-decay-style constant"
-    else
-        NUM_DECAY_ITERATIONS=$((NUM_TRAIN_ITERATIONS/2))
-        EXTRA_ARGS=${EXTRA_ARGS}" --lr-decay-style cosine  --lr-decay-iters "${NUM_DECAY_ITERATIONS}
-    fi
-    TRAINING_ARGS=(
-        --micro-batch-size $MICRO_BATCH_SIZE 
-        --global-batch-size $GLOBAL_BATCH_SIZE 
-        # --rampup-batch-size 16 16 5859375 
-        # --train-samples 262144
-        --train-iters $NUM_TRAIN_ITERATIONS
-        --weight-decay 0.1 
-        --adam-beta1 0.9 
-        --adam-beta2 0.95 
-        --init-method-std 0.008 
-        --clip-grad 1.0 
-        --bf16
-        --lr 1.0e-4 
-        --min-lr 1.0e-5
-        --lr-warmup-iters 1024
-        --no-gradient-accumulation-fusion
-        --seq-length 4096
-    )
-fi
 
 GPT_MODEL_ARGS=(
     --attention-backend auto # Can use (flash/fused/unfused/local)
     --no-masked-softmax-fusion
     --disable-bias-linear
     --position-embedding-type rope
-    --no-rope-fusion
     --normalization RMSNorm
     --swiglu
-    --num-layers $NUM_LAYERS
-    --hidden-size $HIDDEN_SIZE
-    --ffn-hidden-size $INTERMEDIATE_SIZE
-    --num-attention-heads $NUM_ATTENTION_HEADS
     --group-query-attention
-    --num-query-groups $NUM_KEY_VALUE_HEADS
     --kv-channels 128
-    --max-position-embeddings $MAX_POSITION_EMBEDDINGS
     --use-rotary-position-embeddings
     --rotary-percent 1.0
-    --rotary-base $ROPE_THETA
-    --norm-epsilon ${RMS_NORM_EPS}
     --no-bias-swiglu-fusion
     --attention-dropout 0.0
     --hidden-dropout 0.0
+    --no-rope-fusion
+    --no-gradient-accumulation-fusion
 )
 
 
+GLOBAL_BATCH_SIZE=64
+MICRO_BATCH_SIZE=4
 
+if [ $MODEL_SIZE = 0.6B ]; then
+    GPT_MODEL_ARGS+=(
+        --num-layers 28
+        --hidden-size 1024
+        --ffn-hidden-size 3072
+        --num-attention-heads 16
+        --num-query-groups 8
+        --max-position-embeddings 40960
+        --rotary-base 1000000
+        --norm-epsilon 1e-6
+        --qk-layernorm
+    )
+    MODEL_PARALLEL_ARGS+=(
+        --tensor-model-parallel-size 1
+    )
+    TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Instruct-2507
+    EXTRA_ARGS=(
+        --qk-layernorm
+    )
+elif [ $MODEL_SIZE = 1.7B ]; then
+    GPT_MODEL_ARGS+=(
+        --num-layers 28
+        --hidden-size 2048
+        --ffn-hidden-size 6144
+        --num-attention-heads 16
+        --num-query-groups 8
+        --max-position-embeddings 40960
+        --rotary-base 1000000
+        --norm-epsilon 1e-6
+        --qk-layernorm
+    )
+    MODEL_PARALLEL_ARGS+=(
+        --tensor-model-parallel-size 1
+    )
+    TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Instruct-2507
+elif [ $MODEL_SIZE = 8B ]; then
+    GPT_MODEL_ARGS+=(
+        --num-layers 36
+        --hidden-size 4096
+        --ffn-hidden-size 12288
+        --num-attention-heads 32
+        --num-query-groups 8
+        --max-position-embeddings 40960
+        --rotary-base 1000000
+        --norm-epsilon 1e-6
+        --untie-embeddings-and-output-weights
+        --qk-layernorm
+    )
+    MODEL_PARALLEL_ARGS+=(
+        --tensor-model-parallel-size 2
+    )
+    TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Instruct-2507
+elif [ $MODEL_SIZE = QWQ32B ]; then
+    TOEKENIZER_MODEL="/public/llm_models/Qwen/QwQ-32B"
+    MTP_NUM_LAYERS=7
+    if [ $MTP_EH_PROJ_MODE = 10 ]; then
+        MTP_NUM_LAYERS=14
+        MICRO_BATCH_SIZE=2
+    fi
+    GPT_MODEL_ARGS+=(
+        --num-layers 64
+        --hidden-size 5120
+        --ffn-hidden-size 27648
+        --num-attention-heads 40
+        --num-query-groups 8
+        --max-position-embeddings 131072
+        --rotary-base 1000000
+        --norm-epsilon 1e-5
+        --untie-embeddings-and-output-weights
+        --add-qkv-bias
+        --rotary-seq-len-interpolation-factor 1
+        --mtp-num-layers ${MTP_NUM_LAYERS}
+        --main-model-checkpoint /workspace-dyb/qwen-ckpts/QwQ-32B-hf-to-mcore-te-tp4-pp1/release
+        --mtp-loss-scaling-factor 1.0
+        --make-vocab-size-divisible-by 1188
+    )
+    MODEL_PARALLEL_ARGS+=(
+        --tensor-model-parallel-size 4
+    )
+    
+elif [ $MODEL_SIZE = A3B ]; then
+    MTP_NUM_LAYERS=7
+    TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Thinking-2507
+    GPT_MODEL_ARGS+=(
+        --num-layers 48
+        --hidden-size 2048
+        --ffn-hidden-size 6144
+        --moe-ffn-hidden-size 768
+        --num-attention-heads 32
+        --untie-embeddings-and-output-weights
+        --moe-grouped-gemm
+        --moe-router-score-function softmax
+        --moe-token-dispatcher-type alltoall
+        --moe-router-topk 8
+        --moe-layer-freq "([1]*48)"
+        --num-experts 128
+        --num-query-groups 4
+        --qk-layernorm
+        --max-position-embeddings 40960
+        --mtp-num-layers ${MTP_NUM_LAYERS}
+        --mtp-loss-scaling-factor 1.0
+        --main-model-checkpoint /workspace-dyb/qwen-ckpts/Qwen3-30B-A3B-Thinking-2507-tp1-ep8-torch/release
+        --main-model-checkpoint-dtype torch
+        --make-vocab-size-divisible-by 1187
+    )
+    MODEL_PARALLEL_ARGS+=(
+        --tensor-model-parallel-size 1
+        --expert-model-parallel-size 8
+    )
+    # LOAD_PATH=/workspace-dyb/qwen-ckpts/Qwen3-30B-A3B-Thinking-2507-tp1-ep8
+    # GLOBAL_BATCH_SIZE=64
+    GLOBAL_BATCH_SIZE=$((64*$NUM_NODES))
+    MICRO_BATCH_SIZE=1
+else
+    echo "MODEL_SIZE=${MODEL_SIZE} is not supported"
+    exit
+fi
+
+IS_DEV="${IS_DEV:-0}"
+
+if [ $IS_DEV = 1 ]; then
+    NUM_TRAIN_ITERATIONS=3072
+    SAVE_INTERVAL=1024
+else
+    NUM_TRAIN_ITERATIONS=16384
+    SAVE_INTERVAL=4096
+fi
+
+NUM_DECAY_ITERATIONS=$((NUM_TRAIN_ITERATIONS/2))
+
+TRAINING_ARGS=(
+    --weight-decay 0.1 
+    --adam-beta1 0.9 
+    --adam-beta2 0.95 
+    --init-method-std 0.008 
+    --clip-grad 1.0 
+    --bf16
+    --seq-length 4096
+    --lr 1.0e-4 
+    --lr-decay-style cosine 
+    --min-lr 1.0e-5
+    --lr-decay-iters ${NUM_DECAY_ITERATIONS}
+    --lr-warmup-iters 1024
+    --train-iters $NUM_TRAIN_ITERATIONS
+)
+
+
+if [ $TRAIN_MTP_ONLY = 1 ]; then
+    TRAINING_ARGS+=(
+        --train-mtp-only
+        --convert-checkpoint
+    )
+fi
 
 
 DATA_ARGS=(
     --data-path $DATA_PATH 
     --tokenizer-type HuggingFaceTokenizer
-    --make-vocab-size-divisible-by 1188
     --tokenizer-model $TOEKENIZER_MODEL
     --split 949,50,1
+    --micro-batch-size $MICRO_BATCH_SIZE
+    --global-batch-size $GLOBAL_BATCH_SIZE
 )
 
 EVAL_AND_LOGGING_ARGS=(
@@ -230,5 +236,4 @@ torchrun ${DISTRIBUTED_ARGS[@]} gpt3/pretrain_gpt.py \
     ${TRAINING_ARGS[@]} \
     ${MODEL_PARALLEL_ARGS[@]} \
     ${DATA_ARGS[@]} \
-    ${EVAL_AND_LOGGING_ARGS[@]} \
-    $EXTRA_ARGS
+    ${EVAL_AND_LOGGING_ARGS[@]}

@@ -193,10 +193,19 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
             mtp_block_spec=mtp_block_spec,
         )
     if getattr(args, 'train_mtp_only', False) and args.main_model_checkpoint != "":
+        mp_rank = ""
+
         tp_rank = mpu.get_tensor_model_parallel_rank()
+        mp_rank += f"mp_rank_{tp_rank:02d}"
+        
+        ep_size = mpu.get_expert_model_parallel_world_size()
+        if ep_size > 1:
+            ep_rank = mpu.get_expert_model_parallel_rank()
+            mp_rank += f"_{ep_rank:03d}"
+
         ckpt_path = os.path.join(
             args.main_model_checkpoint,
-            f"mp_rank_{tp_rank:02d}",
+            mp_rank,
             "model_optim_rng.pt",
         )
         state_dict = torch.load(ckpt_path, weights_only=False)
@@ -204,7 +213,6 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
         mtp_missing_keys = [item for item in missing_keys if item.startswith('mtp')]
         missing_keys = [item for item in missing_keys if not item.startswith('mtp')]
         print(f"{mtp_missing_keys = }\n{missing_keys = }\n{unexpected_keys = }\n", end="")
-        
 
     print(f"{model=}\n", end="")
     # exit()
@@ -411,6 +419,13 @@ def add_extra_args(parser):
         '--main-model-checkpoint',
         type=str,
         default="",
+        help='',
+    )
+    group.add_argument(
+        '--main-model-checkpoint-dtype',
+        type=str,
+        default="torch",
+        choices=["torch", "torch_dist"],
         help='',
     )
 
