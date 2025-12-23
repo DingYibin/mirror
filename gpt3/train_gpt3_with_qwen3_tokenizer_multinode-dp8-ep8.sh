@@ -23,7 +23,9 @@ DATA_PATH=$3 #<Specify path and file prefix>_text_document
 MODEL_SIZE=$4
 TRAIN_MTP_ONLY=$5
 export MTP_EH_PROJ_MODE=$6
-JUST_CONVERT_CKPT=$7
+NUM_TRAIN_ITERATIONS=$7
+SAVE_INTERVAL=$8
+JUST_CONVERT_CKPT=$9
 
 DISTRIBUTED_ARGS=(
     --nproc_per_node $GPUS_PER_NODE 
@@ -176,19 +178,39 @@ elif [ $MODEL_SIZE = A3B ]; then
     GLOBAL_BATCH_SIZE=$((64*$NUM_NODES))
     MICRO_BATCH_SIZE=1
 elif [ $MODEL_SIZE = A22B ]; then
+    MTP_NUM_LAYERS=3
+    TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-235B-A22B-Instruct-2507
+    GPT_MODEL_ARGS+=(
+        --num-layers 94
+        --hidden-size 4096
+        --ffn-hidden-size 12288
+        --moe-ffn-hidden-size 1536
+        --num-attention-heads 64
+        --untie-embeddings-and-output-weights
+        --moe-grouped-gemm
+        --moe-router-score-function softmax
+        --moe-token-dispatcher-type alltoall
+        --moe-router-topk 8
+        --moe-layer-freq "([1]*94)"
+        --num-experts 128
+        --num-query-groups 4
+        --qk-layernorm
+        --max-position-embeddings 40960
+        --mtp-num-layers ${MTP_NUM_LAYERS}
+        --mtp-loss-scaling-factor 1.0
+        --main-model-checkpoint /workspace-dyb/qwen-ckpts/Qwen3-235B-A22B-Instruct-2507-tp1-ep8/release
+        --main-model-checkpoint-dtype torch
+        --make-vocab-size-divisible-by 1187
+    )
+    MODEL_PARALLEL_ARGS+=(
+        --tensor-model-parallel-size 1
+        --expert-model-parallel-size 8
+    )
+    GLOBAL_BATCH_SIZE=$((64*$NUM_NODES))
+    MICRO_BATCH_SIZE=1
 else
     echo "MODEL_SIZE=${MODEL_SIZE} is not supported"
     exit
-fi
-
-IS_DEV="${IS_DEV:-0}"
-
-if [ $IS_DEV = 1 ]; then
-    NUM_TRAIN_ITERATIONS=3072
-    SAVE_INTERVAL=1024
-else
-    NUM_TRAIN_ITERATIONS=16384
-    SAVE_INTERVAL=4096
 fi
 
 NUM_DECAY_ITERATIONS=$((NUM_TRAIN_ITERATIONS/2))

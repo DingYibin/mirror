@@ -208,12 +208,23 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
             mp_rank,
             "model_optim_rng.pt",
         )
-        state_dict = torch.load(ckpt_path, weights_only=False)
+        state_dict = torch.load(ckpt_path, weights_only=False, map_location='cpu')
         missing_keys, unexpected_keys = model.load_state_dict(state_dict['model'], strict=False)
         mtp_missing_keys = [item for item in missing_keys if item.startswith('mtp')]
         missing_keys = [item for item in missing_keys if not item.startswith('mtp')]
         print(f"{mtp_missing_keys = }\n{missing_keys = }\n{unexpected_keys = }\n", end="")
-
+        del state_dict
+    if getattr(args, 'train_mtp_only', False) and getattr(model, 'mtp', None) is not None:
+        for param in model.parameters():
+            param.requires_grad = False
+        # for name, param in model.mtp.named_parameters():
+        #     print_rank_0(f"{name = }, {param.requires_grad = }")
+        # print_rank_0("=========================================\n")
+        for param in model.mtp.parameters():
+            param.requires_grad = True
+        # for name, param in model.mtp.named_parameters():
+        #     print_rank_0(f"{name = }, {param.requires_grad = }")
+    
     print(f"{model=}\n", end="")
     # exit()
     return model

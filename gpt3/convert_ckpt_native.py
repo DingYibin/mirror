@@ -201,17 +201,17 @@ def convert_weights(
 
 
 
-convert_weights(
-    source_dir="/workspace-dyb/experiments/ckpt/qwen-30b-a3b-thinking-tp1-ep8/torch/iter_0016384/",
-    target_dir="/workspace-dyb/hw-ding/qwen-30b-a3b-thinking-mtp-7",
-    tp_size=1,
-    pp_size=1,
-    ep_size=8,
-    hidden_size=2048,
-    num_attention_heads=32,
-    num_key_value_heads=4,
-    num_experts=128,
-)
+# convert_weights(
+#     source_dir="/workspace-dyb/experiments/ckpt/qwen-30b-a3b-thinking-tp1-ep8/torch/iter_0016384/",
+#     target_dir="/workspace-dyb/hw-ding/qwen3-30b-a3b-thinking-mtp-7",
+#     tp_size=1,
+#     pp_size=1,
+#     ep_size=8,
+#     hidden_size=2048,
+#     num_attention_heads=32,
+#     num_key_value_heads=4,
+#     num_experts=128,
+# )
 
 
 # convert_weights(

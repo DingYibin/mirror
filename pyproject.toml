@@ -8,6 +8,7 @@ dependencies = [
     "datasets>=4.4.1",
     "jsonlines>=4.0.0",
     "omegaconf>=2.3.0",
+    "pybind11[global]>=3.0.1",
     "tensorboard>=2.20.0",
     "tensorstore!=0.1.46,!=0.1.72",
     "torch==2.9.1",
