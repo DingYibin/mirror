@@ -23,6 +23,8 @@ DATA_PATH=$3 #<Specify path and file prefix>_text_document
 MODEL_SIZE=$4
 TRAIN_MTP_ONLY=$5
 export MTP_EH_PROJ_MODE=$6
+JUST_CONVERT_CKPT=$7
+
 DISTRIBUTED_ARGS=(
     --nproc_per_node $GPUS_PER_NODE 
     --nnodes $NUM_NODES 
@@ -30,7 +32,7 @@ DISTRIBUTED_ARGS=(
     --master_port $MASTER_PORT
     --node_rank $NODE_RANK
 )
-EXTRA_ARGS=" "
+
 MODEL_PARALLEL_ARGS=(
 	--pipeline-model-parallel-size 1 
 )
@@ -52,7 +54,12 @@ GPT_MODEL_ARGS=(
     --no-rope-fusion
     --no-gradient-accumulation-fusion
 )
-
+if [ $JUST_CONVERT_CKPT = 1 ]; then
+    GPT_MODEL_ARGS+=(
+        --ckpt-convert-format torch
+        --ckpt-convert-save ${CHECKPOINT_PATH}
+    )
+fi
 
 GLOBAL_BATCH_SIZE=64
 MICRO_BATCH_SIZE=4
@@ -73,9 +80,6 @@ if [ $MODEL_SIZE = 0.6B ]; then
         --tensor-model-parallel-size 1
     )
     TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Instruct-2507
-    EXTRA_ARGS=(
-        --qk-layernorm
-    )
 elif [ $MODEL_SIZE = 1.7B ]; then
     GPT_MODEL_ARGS+=(
         --num-layers 28
@@ -136,6 +140,7 @@ elif [ $MODEL_SIZE = QWQ32B ]; then
     MODEL_PARALLEL_ARGS+=(
         --tensor-model-parallel-size 4
     )
+    GLOBAL_BATCH_SIZE=$((32*$NUM_NODES))
     
 elif [ $MODEL_SIZE = A3B ]; then
     MTP_NUM_LAYERS=7
@@ -170,6 +175,7 @@ elif [ $MODEL_SIZE = A3B ]; then
     # GLOBAL_BATCH_SIZE=64
     GLOBAL_BATCH_SIZE=$((64*$NUM_NODES))
     MICRO_BATCH_SIZE=1
+elif [ $MODEL_SIZE = A22B ]; then
 else
     echo "MODEL_SIZE=${MODEL_SIZE} is not supported"
     exit

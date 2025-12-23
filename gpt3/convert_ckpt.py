@@ -10,9 +10,14 @@ target_dir = "/workspace-dyb/experiments/qwq-tp8-dp2/ckpt/converted-0-hf"
 source_dir = "/workspace-dyb/experiments/qwq-tp8-dp2-move/ckpt/converted-0"
 target_dir = "/workspace-dyb/experiments/qwq-tp8-dp2-move/ckpt/converted-0-hf"
 
-
-
 tp_size = 8
+pp_size = 1
+
+
+source_dir = "/workspace-dyb/experiments/ckpt/qwq-tp4-dp4-mtp-mode-0/converted-0"
+target_dir = "/workspace-dyb/experiments/ckpt/qwq-tp4-dp4-mtp-mode-0/converted-0-hf"
+hidden_size = 5120
+tp_size = 4
 pp_size = 1
 
 num_attention_heads = 40
@@ -26,7 +31,7 @@ keys = set()
 for i in range(tp_size):
     for j in range(pp_size):
         filepath = os.path.join(source_dir, f"tp-{tp_size}-{i}-pp-{pp_size}-{j}.pt")
-        one_weight = torch.load(filepath， map_location=torch.device('cpu'))
+        one_weight = torch.load(filepath, map_location=torch.device('cpu'))
         if weights[i] is None:
             weights[i] = {}
         for key, value in one_weight.items():
@@ -52,9 +57,25 @@ for key in keys:
             if val is not None:
                 merged_weight[key] = val
                 break
-    elif key.endswith(("eh_proj.weight", "linear_fc1.weight", "self_attention.linear_qkv.weight", "self_attention.linear_qkv.bias")):
+    elif key.endswith(("eh_proj.weight",)):
         # column parallel
         vals = [weights[i][key] for i in range(tp_size)]
+        val = torch.cat(vals, dim=0)
+        merged_weight[key] = val
+    elif key.endswith(("linear_fc1.weight",)):
+        vals = [weights[i][key].view(2, -1, hidden_size) for i in range(tp_size)]
+        val = torch.cat(vals, dim=1).view(-1, hidden_size)
+        merged_weight[key] = val
+    elif key.endswith(("self_attention.linear_qkv.weight", "self_attention.linear_qkv.bias")):
+        dim = weights[0][key].shape[0] * tp_size
+        head_dim = dim // (num_attention_heads + num_key_value_heads * 2)
+        num_per_group = num_attention_heads // num_key_value_heads
+        num_group_per_tp = num_key_value_heads // tp_size
+        if key.endswith("weight"):
+            vals = [weights[i][key].view(num_group_per_tp, -1, head_dim, weights[i][key].shape[-1]) for i in range(tp_size)]
+        elif key.endswith("bias"):
+            vals = [weights[i][key].view(num_group_per_tp, -1, head_dim) for i in range(tp_size)]
+        print(", ".join([f"{item.shape}" for item in vals]))
         val = torch.cat(vals, dim=0)
         merged_weight[key] = val
     elif key.endswith(("linear_fc2.weight", "self_attention.linear_proj.weight")):
@@ -67,11 +88,13 @@ for key in keys:
         for i in range(tp_size):
             val = weights[i].get(key, torch.tensor([]))
             out_str += f"\n{val}"
-        print(out_str)
+        print("ohgaoighj " + out_str)
 
 converted_weight = dict()
 for key, val in merged_weight.items():
     name = key.split(".")
+    name[0] = 'model'
+    name[1] = 'mtp'
     if name[3] == 'transformer_layer':
         name = name[:3] + name[4:]
     if name[3] == "self_attention":
@@ -85,8 +108,8 @@ for key, val in merged_weight.items():
         name[4] = 'down_proj'
     elif name[3] == 'self_attn' and name[4] == 'linear_proj':
         name[4] = 'o_proj'
-    elif name[3] == 'final_layernorm':
-        name = name[:3] + ['shared_head', 'norm', 'weight']
+    # elif name[3] == 'final_layernorm':
+    #     name = name[:3] + ['shared_head', 'norm', 'weight']
 
     if name[3] == 'mlp' and name[4] == 'linear_fc1':
         gate_proj, up_proj = torch.chunk(val, 2, 0)
@@ -103,10 +126,21 @@ for key, val in merged_weight.items():
         # torch.split(val, )
         dim = val.shape[0]
         head_dim = dim // (num_attention_heads + num_key_value_heads * 2)
-        q_dim = head_dim * num_attention_heads
-        k_dim = head_dim * num_key_value_heads
-        v_dim = head_dim * num_key_value_heads
-        q_proj, k_proj, v_proj = torch.split(val, [q_dim, k_dim, v_dim])
+        num_per_group = num_attention_heads // num_key_value_heads
+        # if name[5] == "weight":
+        #     val = val.view(num_key_value_heads, -1, head_dim, val.shape[-1])
+        # elif name[5] == "bias":
+        #     val = val.view(num_key_value_heads, -1, head_dim)
+        q_proj, k_proj, v_proj = torch.split(val, [num_per_group, 1, 1], dim=1)
+        print(f"{q_proj.shape = }, {k_proj.shape = }, {v_proj.shape = }")
+        if name[5] == "weight":
+            q_proj = q_proj.reshape(-1, q_proj.shape[-1])
+            k_proj = k_proj.reshape(-1, k_proj.shape[-1])
+            v_proj = v_proj.reshape(-1, v_proj.shape[-1])
+        elif name[5] == "bias":
+            q_proj = q_proj.reshape(-1)
+            k_proj = k_proj.reshape(-1)
+            v_proj = v_proj.reshape(-1)
 
         name[4] = "q_proj"
         q_key = ".".join(name)

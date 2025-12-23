@@ -782,17 +782,34 @@ def pretrain(
         )
 
     if args.convert_checkpoint:
-        dp_rank = mpu.get_data_parallel_rank()
-        if args.convert_checkpoint_save == "":
-            args.convert_checkpoint_save = os.path.join(args.save, f"converted-{dp_rank}")
-        os.makedirs(args.convert_checkpoint_save, exist_ok=True)
-        # if mpu.get_data_parallel_rank() == 0:
-        tp_rank = mpu.get_tensor_model_parallel_rank()
-        tp_size = mpu.get_tensor_model_parallel_world_size()
-        pp_rank = mpu.get_pipeline_model_parallel_rank()
-        pp_size = mpu.get_pipeline_model_parallel_world_size()
-        file_path = os.path.join(args.convert_checkpoint_save, f"tp-{tp_size}-{tp_rank}-pp-{pp_size}-{pp_rank}.pt")
-        torch.save(model[0].state_dict_for_save_checkpoint(), file_path)
+        args.ckpt_convert_format = "torch"
+        load_ckpt_format = args.ckpt_format
+        args.ckpt_format = args.ckpt_convert_format
+        args.save = os.path.join(args.save, args.ckpt_convert_format)
+        update_use_dist_ckpt(args)
+
+        save_checkpoint(
+            args.iteration,
+            model,
+            optimizer,
+            opt_param_scheduler,
+            args.num_floating_point_operations_so_far,
+            preprocess_common_state_dict_fn=preprocess_common_state_dict,
+        )
+
+        print_rank_0("> converted checkpoint: %s -> %s." % (load_ckpt_format, args.ckpt_format))
+
+        # dp_rank = mpu.get_data_parallel_rank()
+        # if args.convert_checkpoint_save == "":
+        #     args.convert_checkpoint_save = os.path.join(args.save, f"converted-{dp_rank}")
+        # os.makedirs(args.convert_checkpoint_save, exist_ok=True)
+        # # if mpu.get_data_parallel_rank() == 0:
+        # tp_rank = mpu.get_tensor_model_parallel_rank()
+        # tp_size = mpu.get_tensor_model_parallel_world_size()
+        # pp_rank = mpu.get_pipeline_model_parallel_rank()
+        # pp_size = mpu.get_pipeline_model_parallel_world_size()
+        # file_path = os.path.join(args.convert_checkpoint_save, f"tp-{tp_size}-{tp_rank}-pp-{pp_size}-{pp_rank}.pt")
+        # torch.save(model[0].state_dict_for_save_checkpoint(), file_path)
         torch.distributed.barrier()
 
     wandb_writer = get_wandb_writer()
