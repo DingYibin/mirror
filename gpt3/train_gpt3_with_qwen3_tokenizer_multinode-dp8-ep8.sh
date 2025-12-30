@@ -63,8 +63,8 @@ if [ $JUST_CONVERT_CKPT = 1 ]; then
     )
 fi
 
-GLOBAL_BATCH_SIZE=64
-MICRO_BATCH_SIZE=4
+GLOBAL_BATCH_SIZE=1024
+MICRO_BATCH_SIZE=1
 
 if [ $MODEL_SIZE = 0.6B ]; then
     GPT_MODEL_ARGS+=(
@@ -142,29 +142,33 @@ elif [ $MODEL_SIZE = QWQ32B ]; then
     MODEL_PARALLEL_ARGS+=(
         --tensor-model-parallel-size 4
     )
-    GLOBAL_BATCH_SIZE=$((32*$NUM_NODES))
+    # GLOBAL_BATCH_SIZE=$((32*$NUM_NODES))
     
 elif [ $MODEL_SIZE = A3B ]; then
     MTP_NUM_LAYERS=7
+    MTP_LOSS_SCALING_FACTOR=$(python -c "print(1.0 * ${MTP_NUM_LAYERS} / 3.0)")
     TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Thinking-2507
     GPT_MODEL_ARGS+=(
         --num-layers 48
         --hidden-size 2048
         --ffn-hidden-size 6144
-        --moe-ffn-hidden-size 768
         --num-attention-heads 32
         --untie-embeddings-and-output-weights
+        --moe-ffn-hidden-size 768
         --moe-grouped-gemm
         --moe-router-score-function softmax
         --moe-token-dispatcher-type alltoall
         --moe-router-topk 8
         --moe-layer-freq "([1]*48)"
+        --moe-router-load-balancing-type aux_loss
+        --moe-aux-loss-coeff 0.001
+        # --moe-layer-recompute
         --num-experts 128
         --num-query-groups 4
         --qk-layernorm
         --max-position-embeddings 40960
         --mtp-num-layers ${MTP_NUM_LAYERS}
-        --mtp-loss-scaling-factor 1.0
+        --mtp-loss-scaling-factor ${MTP_LOSS_SCALING_FACTOR}
         --main-model-checkpoint /workspace-dyb/qwen-ckpts/Qwen3-30B-A3B-Thinking-2507-tp1-ep8-torch/release
         --main-model-checkpoint-dtype torch
         --make-vocab-size-divisible-by 1187
@@ -175,29 +179,33 @@ elif [ $MODEL_SIZE = A3B ]; then
     )
     # LOAD_PATH=/workspace-dyb/qwen-ckpts/Qwen3-30B-A3B-Thinking-2507-tp1-ep8
     # GLOBAL_BATCH_SIZE=64
-    GLOBAL_BATCH_SIZE=$((64*$NUM_NODES))
-    MICRO_BATCH_SIZE=1
+    # GLOBAL_BATCH_SIZE=$((1024*$NUM_NODES))
+    MICRO_BATCH_SIZE=2
 elif [ $MODEL_SIZE = A22B ]; then
     MTP_NUM_LAYERS=3
+    MTP_LOSS_SCALING_FACTOR=$(python -c "print(1.0 * ${MTP_NUM_LAYERS} / 3.0)")
     TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-235B-A22B-Instruct-2507
     GPT_MODEL_ARGS+=(
         --num-layers 94
         --hidden-size 4096
         --ffn-hidden-size 12288
-        --moe-ffn-hidden-size 1536
         --num-attention-heads 64
         --untie-embeddings-and-output-weights
+        --moe-ffn-hidden-size 1536
         --moe-grouped-gemm
         --moe-router-score-function softmax
         --moe-token-dispatcher-type alltoall
         --moe-router-topk 8
         --moe-layer-freq "([1]*94)"
+        --moe-router-load-balancing-type aux_loss
+        --moe-aux-loss-coeff 0.001
+        # --moe-layer-recompute
         --num-experts 128
         --num-query-groups 4
         --qk-layernorm
         --max-position-embeddings 40960
         --mtp-num-layers ${MTP_NUM_LAYERS}
-        --mtp-loss-scaling-factor 1.0
+        --mtp-loss-scaling-factor ${MTP_LOSS_SCALING_FACTOR}
         --main-model-checkpoint /workspace-dyb/qwen-ckpts/Qwen3-235B-A22B-Instruct-2507-tp1-ep8/release
         --main-model-checkpoint-dtype torch
         --make-vocab-size-divisible-by 1187
@@ -206,13 +214,14 @@ elif [ $MODEL_SIZE = A22B ]; then
         --tensor-model-parallel-size 1
         --expert-model-parallel-size 8
     )
-    GLOBAL_BATCH_SIZE=$((64*$NUM_NODES))
-    MICRO_BATCH_SIZE=1
+    # GLOBAL_BATCH_SIZE=$((64*$NUM_NODES))
+    # MICRO_BATCH_SIZE=1
 else
     echo "MODEL_SIZE=${MODEL_SIZE} is not supported"
     exit
 fi
 
+NUM_WARMUP_ITERATIONS=$((NUM_TRAIN_ITERATIONS/16))
 NUM_DECAY_ITERATIONS=$((NUM_TRAIN_ITERATIONS/2))
 
 TRAINING_ARGS=(
@@ -227,7 +236,7 @@ TRAINING_ARGS=(
     --lr-decay-style cosine 
     --min-lr 1.0e-5
     --lr-decay-iters ${NUM_DECAY_ITERATIONS}
-    --lr-warmup-iters 1024
+    --lr-warmup-iters ${NUM_WARMUP_ITERATIONS}
     --train-iters $NUM_TRAIN_ITERATIONS
 )
 

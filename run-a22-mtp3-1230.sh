@@ -11,15 +11,16 @@ echo $LOGS_FILE
 EXPERIMENTS_DIR=/workspace-dyb/experiments
 
 # experiment
-EXPERIMENT_NAME=qwen-30b-a3b-thinking-tp1-ep8-with-aux-loss
+EXPERIMENT_NAME=qwen3-a22b-instruct-tp1-ep8-with-aux-loss
 MTP_EH_PROJ_MODE=0
+# export NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER=2
 JUST_CONVERT_CKPT=0
 
 gpt3/train_gpt3_with_qwen3_tokenizer_multinode-dp8-ep8.sh \
     ${EXPERIMENTS_DIR}/ckpt/${EXPERIMENT_NAME} \
     ${EXPERIMENTS_DIR}/log/${EXPERIMENT_NAME} \
     /workspace-dyb/converted_dataset/all \
-    A3B \
+    A22B \
     1 \
     ${MTP_EH_PROJ_MODE} \
     16384 \
