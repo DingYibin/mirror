@@ -789,7 +789,7 @@ def pretrain(
         update_use_dist_ckpt(args)
 
         save_checkpoint(
-            args.iteration,
+            iteration,
             model,
             optimizer,
             opt_param_scheduler,
