@@ -1,7 +1,7 @@
 # Copyright (c) 2023, NVIDIA CORPORATION.  All rights reserved.
 
 """Pretrain and SFT GPT."""
-
+import copy
 import datetime
 import os
 import sys
@@ -44,6 +44,9 @@ assert MTP_EH_PROJ_MODE >= 0 and MTP_EH_PROJ_MODE <= 10, f"MTP_EH_PROJ_MODE = {M
 
 if os.environ.get("MTP_EH_PROJ_MODE", "0") != "0":
     import gpt3.patch_mtp
+
+if os.environ.get("TRAIN_MODEL_MODE", "0") == "2":
+    import gpt3.patch_enough
 
 from megatron.core import parallel_state
 from megatron.training import get_args
@@ -93,7 +96,8 @@ except ImportError:
 stimer = StragglerDetector()
 
 from gpt3.training import pretrain
-from gpt3.patch_gpt import OnlyMTPGPTModel
+from gpt3.only_mtp_gptmodel import OnlyMTPGPTModel
+from gpt3.enough_model import EnoughModel
 
 def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
     """Builds the model.
@@ -175,6 +179,8 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
     # print(f"{args.padded_vocab_size=}")
     # print(f"{args.extra_vocab_size=}")
     model_cls = OnlyMTPGPTModel if getattr(args, 'train_mtp_only', False) else GPTModel
+    model_cls_list = [GPTModel, OnlyMTPGPTModel, EnoughModel, EnoughModel]
+    model_cls = model_cls_list[getattr(args, 'train_model_mode', 0)]
     with build_model_context(**build_model_context_args):
         model = model_cls(
             config=config,
@@ -192,7 +198,7 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
             rope_scaling=args.use_rope_scaling,
             mtp_block_spec=mtp_block_spec,
         )
-    if getattr(args, 'train_mtp_only', False) and args.main_model_checkpoint != "":
+    if args.main_model_checkpoint != "":
         mp_rank = ""
 
         tp_rank = mpu.get_tensor_model_parallel_rank()
@@ -214,7 +220,7 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
         missing_keys = [item for item in missing_keys if not item.startswith('mtp')]
         print(f"{mtp_missing_keys = }\n{missing_keys = }\n{unexpected_keys = }\n", end="")
         del state_dict
-    if getattr(args, 'train_mtp_only', False) and getattr(model, 'mtp', None) is not None:
+    if getattr(args, 'train_model_mode', 0) == 1 and getattr(model, 'mtp', None) is not None:
         for param in model.parameters():
             param.requires_grad = False
         # for name, param in model.mtp.named_parameters():
@@ -272,9 +278,19 @@ def loss_func(
 
     if has_nvidia_modelopt and modelopt_args_enabled(args):  # [ModelOpt]
         return loss_func_modelopt(loss_mask, output_tensor, model=model)
-
+    if getattr(args, 'train_model_mode', 0) in [2, 3]:
+        loss_mask_list = [loss_mask]
+        for i in range(int(os.environ.get("NUM_PREDICTION_TOKENS", "1")) - 1):
+            loss_mask = torch.roll(loss_mask, shifts=-1, dims=-1)
+            loss_mask.select(-1, -1).fill_(0)
+            loss_mask_list.append(loss_mask)
+        # print(f"{loss_mask.shape=}\n", end="")
+        loss_mask = torch.stack(loss_mask_list, dim=-1)
+        # print(f"{output_tensor.shape=} {loss_mask.shape=}")
     losses = output_tensor.view(-1).float()
     loss_mask = loss_mask.view(-1).float()
+    # print(f"{losses.shape=} {loss_mask.shape=}")
+    # exit()
     loss = torch.sum(losses * loss_mask)
 
     # Check individual rank losses are not NaN prior to DP all-reduce.
@@ -425,6 +441,18 @@ def add_extra_args(parser):
         action="store_true",
         help='Whether or not to train mtp layers only.',
     )
+
+    # 0: original
+    # 1: mtp only
+    # 2: mtp is enough
+    # 3: mtp is enough and distill 
+    group.add_argument(
+        '--train-model-mode',
+        type=int,
+        default=0,
+        choices=[0, 1, 2],
+    )
+
 
     group.add_argument(
         '--main-model-checkpoint',

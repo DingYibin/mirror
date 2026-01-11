@@ -21,7 +21,7 @@ CHECKPOINT_PATH=$1 #<Specify path>
 TENSORBOARD_LOGS_PATH=$2 #<Specify path>
 DATA_PATH=$3 #<Specify path and file prefix>_text_document
 MODEL_SIZE=$4
-TRAIN_MTP_ONLY=$5
+export TRAIN_MODEL_MODE=$5
 export MTP_EH_PROJ_MODE=$6
 NUM_TRAIN_ITERATIONS=$7
 SAVE_INTERVAL=$8
@@ -148,6 +148,11 @@ elif [ $MODEL_SIZE = A3B ]; then
     MTP_NUM_LAYERS=7
     MTP_LOSS_SCALING_FACTOR=$(python -c "print(1.0 * ${MTP_NUM_LAYERS} / 3.0)")
     TOEKENIZER_MODEL=/public/llm_models/Qwen/Qwen3-30B-A3B-Thinking-2507
+    if [ $TRAIN_MODEL_MODE = 2 ]; then
+        MTP_NUM_LAYERS=2
+        export NUM_PREDICTION_TOKENS=4
+        GLOBAL_BATCH_SIZE=$((32*$NUM_NODES))
+    fi
     GPT_MODEL_ARGS+=(
         --num-layers 48
         --hidden-size 2048
@@ -162,7 +167,7 @@ elif [ $MODEL_SIZE = A3B ]; then
         --moe-layer-freq "([1]*48)"
         --moe-router-load-balancing-type aux_loss
         --moe-aux-loss-coeff 0.001
-        # --moe-layer-recompute
+        --moe-layer-recompute
         --num-experts 128
         --num-query-groups 4
         --qk-layernorm
@@ -241,9 +246,15 @@ TRAINING_ARGS=(
 )
 
 
-if [ $TRAIN_MTP_ONLY = 1 ]; then
+if [ $TRAIN_MODEL_MODE = 1 ]; then
     TRAINING_ARGS+=(
         --train-mtp-only
+        --train-model-mode 1
+        --convert-checkpoint
+    )
+elif [ $TRAIN_MODEL_MODE = 2 ]; then
+    TRAINING_ARGS+=(
+        --train-model-mode 2
         --convert-checkpoint
     )
 fi

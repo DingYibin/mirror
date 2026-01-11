@@ -7,12 +7,14 @@ requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.4.1",
     "jsonlines>=4.0.0",
+    "numpy==1.26.4",
     "omegaconf>=2.3.0",
+    "psutil>=7.2.1",
     "pybind11[global]>=3.0.1",
     "regex>=2025.11.3",
     "tensorboard>=2.20.0",
     "tensorstore!=0.1.46,!=0.1.72",
-    "torch==2.9.1",
+    "torch==2.9",
     "transformer-engine[jax,pytorch]>=2.11.0",
     "transformers>=4.57.3",
 ]

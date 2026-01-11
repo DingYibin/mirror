@@ -12,7 +12,7 @@ echo $LOGS_FILE
 EXPERIMENTS_DIR=/workspace-dyb/experiments
 
 # experiment
-EXPERIMENT_NAME=qwen3-a3b-thinking-tp1-ep8-dev
+EXPERIMENT_NAME=qwen3-a3b-thinking-tp1-ep8-enough-dev
 MTP_EH_PROJ_MODE=0
 
 # export NUM_TRANSFORMER_BLOCK_ONE_MTP_LAYER=2
@@ -21,9 +21,9 @@ gpt3/train_gpt3_with_qwen3_tokenizer_multinode-dp8-ep8.sh \
     ${EXPERIMENTS_DIR}/log/${EXPERIMENT_NAME} \
     /workspace-dyb/converted_dataset/shareAI/ShareGPT-Chinese-English-90k/sharegpt_jsonl/processed_data_text_document \
     A3B \
-    1 \
+    2 \
     ${MTP_EH_PROJ_MODE} \
-    3072 \
-    1024 \
+    32 \
+    2 \
     0 \
     &> $LOGS_FILE
